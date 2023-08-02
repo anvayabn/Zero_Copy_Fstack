@@ -23,6 +23,8 @@ all:
 	cc ${CFLAGS} -o ${TARGET} main.c ${LIBS}
 	cc ${CFLAGS} -o hello_newrte main_newRte.c ${LIBS}
 	cc ${CFLAGS} -o hello_client main_client.c ${LIBS}
+	cc ${CFLAGS} -o hello_host main_host.c ${LIBS}
+
 .PHONY: clean
 clean:
 	rm -f *.o ${TARGET} 
@@ -30,3 +32,4 @@ clean:
 	# rm -f *.o ${TARGET}_zc
 	rm -f *.o hello_newrte
 	rm -f *.o hello_client
+	rm -f *.o hello_host
