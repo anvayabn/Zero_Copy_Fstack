@@ -204,17 +204,64 @@ char html5[] =
 void *ptr;  
 
 /* Global variable to host socket */
-int hostfd = -1;
 char *hostip = "192.168.1.1";
 uint16_t hostport = 8000;
 char *from_hostdata;
-size_t len_from_hostdata =1024;
+size_t len_from_hostdata = 1152;
 
-/* Function to Connect to host */
+struct fd_pair {
+    int hostfd;
+    int clientfd;
+};
+
+struct fd_pair fd_map[MAX_CONNECTIONS] = {0};
+
+void add_fd_pair(struct fd_pair *map, int hostfd, int clientfd) {
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (map[i].hostfd == 0 && map[i].clientfd == 0) {
+            map[i].hostfd = hostfd;
+            map[i].clientfd = clientfd;
+            return;
+        }
+    }
+    printf("Map is full, cannot add new pair\n");
+}
+
+void remove_fd_pair(struct fd_pair *map, int hostfd) {
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (map[i].hostfd == hostfd) {
+            map[i].hostfd = 0;
+            map[i].clientfd = 0; 
+            return;
+        }
+    }
+    printf("Pair not found in map\n");
+}
+
+int get_hostfd(struct fd_pair *map, int clientfd) {
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (map[i].clientfd == clientfd) {
+            return map[i].hostfd;
+        }
+    }
+    return -1; 
+}
+
+int get_clientfd(struct fd_pair *map, int hostfd) {
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (map[i].hostfd == hostfd) {
+            return map[i].clientfd;
+        }
+    }
+    return -1; 
+}
+
+
+/* Connect to host */
 int connect_to_host(char *ip, uint16_t port){
-    hostfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (hostfd < 0) {
-        printf("ff_socket failed, hostfd:%d, errno:%d, %s\n", hostfd, errno, strerror(errno));
+    int hostfd_local = socket(AF_INET, SOCK_STREAM, 0);
+    if (hostfd_local < 0) {
+        printf("socket failed, hostfd:%d, errno:%d, %s\n", hostfd_local, errno, strerror(errno));
         exit(1);
     }
     struct sockaddr_in host_addr;
@@ -224,44 +271,48 @@ int connect_to_host(char *ip, uint16_t port){
     host_addr.sin_port = htons(port);
     if (inet_pton(AF_INET, ip, &host_addr.sin_addr) <= 0) {
         perror("Failed to set server address\n");
-        close(hostfd);
+        close(hostfd_local);
         return -1;
     }
 
-    if (connect(hostfd, (struct sockaddr *)&host_addr, sizeof(host_addr)) < 0) {
+    if (connect(hostfd_local, (struct sockaddr *)&host_addr, sizeof(host_addr)) < 0) {
         perror("Failed to connect to server\n");
-        close(hostfd);
+        close(hostfd_local);
         return -1;
     }
-    return 0;
+    return hostfd_local;
 }
 
-/* Function to send to host */
-int send_to_host(char *data, size_t len){
+/* Send to host */
+int send_to_host(int hostfd, char *data, size_t len){
     if (hostfd < 0){
-        if (connect_to_host(hostip, hostport) < 0){
-            printf("connect to host failed\n");
+        if(connect_to_host(hostip, hostport) < 0){
+            printf("connect to host failed at branch 1\n");
             return -1;
         }
+
     }
     if (write(hostfd, data, len) < 0){
         printf("write to host failed\n");
         return -1;
     }
-    return 0;
+    return hostfd;
 }
+
 /* Read from host */
-int read_from_host(char *data, size_t len){
+int read_from_host(int hostfd, char *data, size_t len){
     if (hostfd < 0){
         printf("hostfd not initialized\n");
         return -1;
     }
-    if (read(hostfd, data, len) < 0){
+    int bytes_read = read(hostfd, data, len);
+    if (bytes_read < 0){
         printf("read from host failed\n");
         return -1;
     }
-    return 0;
+    return bytes_read;
 }
+
 int loop(void *arg)
 {
     /* Wait for events to happen */
@@ -282,7 +333,6 @@ int loop(void *arg)
         if (event.flags & EV_EOF) {
             /* Simply close socket */
             ff_close(clientfd);
-            // close (hostfd);
 #ifdef INET6
         } else if (clientfd == sockfd || clientfd == sockfd6) {
 #else
@@ -296,6 +346,14 @@ int loop(void *arg)
                         strerror(errno));
                     break;
                 }
+                /* Create a connection to host and map the hostfd to clientfd*/
+                int hostfd = connect_to_host(hostip, hostport);
+                printf("The hostfd is %d\n", hostfd);
+                if (hostfd < 0){
+                    printf("connect to host failed at branch 2\n");
+                    return -1;
+                }
+                add_fd_pair(fd_map, hostfd, nclientfd);
 
                 /* Add to event list */
                 EV_SET(&kevSet, nclientfd, EVFILT_READ, EV_ADD, 0, 0, NULL);
@@ -319,21 +377,40 @@ int loop(void *arg)
             ssize_t readlen = ff_read(clientfd, ptr1, nbytes);
 
             /* Get the pointer to data from the freebsd mbuf */
-            char *data = (char *) ff_mbuf_mtod(ptr);
+            char *data = (char *) ff_mbuf_mtod(ptr);\
 
+            /* Get associated hostfd */
+            int host_fd = get_hostfd(fd_map, clientfd);
+            if (host_fd < 0){
+                printf("hostfd not found\n");
+                return -1;
+            }
             /* Write the data to host */
-            if (send_to_host(data, readlen) < 0){
+            if (send_to_host(host_fd, data, readlen) < 0){
                 printf("send to host failed\n");
                 return -1;
             }
+            printf("send was successful\n");
+            /* Create buffer for reading data from the host */
+            from_hostdata = malloc(len_from_hostdata);
 
-            /* Read from data */
-            if (read_from_host(from_hostdata, len_from_hostdata) < 0){
-                printf("read from host failed\n");
-                return -1;
+            /* Read data from host */
+            int total_bytes_read = 0;
+            while (total_bytes_read < len_from_hostdata) {
+                int bytes_read = read_from_host(host_fd, from_hostdata + total_bytes_read, (len_from_hostdata - total_bytes_read));
+                if (bytes_read < 0){
+                    printf("read from host failed\n");
+                    free(from_hostdata);
+                    return -1;
+                } else if (bytes_read == 0) {
+                    break;
+                }
+                total_bytes_read += bytes_read;
             }
             printf("The contents of from_hostdata is %s\n", from_hostdata);
 
+            /* Free the buffer after use */
+            free(from_hostdata);
             /* Get the rte_mbuf associated with the freebsd mbuf */
             void *rteMbuf_void = ff_rte_frm_extcl(ptr);
             struct rte_mbuf *rteMbuf = (struct rte_mbuf *)rteMbuf_void;
@@ -380,7 +457,6 @@ int main(int argc, char * argv[])
         printf("ff_socket failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
         exit(1);
     }
-
     /* Set non blocking */
     int on = 1;
     ff_ioctl(sockfd, FIONBIO, &on);
@@ -440,11 +516,6 @@ int main(int argc, char * argv[])
     }
 #endif
     /* Create a host socket */
-    if (connect_to_host(hostip, hostport) < 0){
-        printf("connect to host failed\n");
-        return -1;
-    }
-
     ff_run(loop, NULL);
     return 0;
 }
