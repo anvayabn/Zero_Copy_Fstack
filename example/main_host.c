@@ -213,7 +213,7 @@ struct fd_pair {
     int hostfd;
     int clientfd;
 };
-
+#define MAX_CONNECTIONS 1024
 struct fd_pair fd_map[MAX_CONNECTIONS] = {0};
 
 void add_fd_pair(struct fd_pair *map, int hostfd, int clientfd) {
@@ -230,8 +230,8 @@ void add_fd_pair(struct fd_pair *map, int hostfd, int clientfd) {
 void remove_fd_pair(struct fd_pair *map, int hostfd) {
     for (int i = 0; i < MAX_CONNECTIONS; i++) {
         if (map[i].hostfd == hostfd) {
-            map[i].hostfd = 0;
-            map[i].clientfd = 0; 
+            map[i].hostfd = -1;
+            map[i].clientfd = -1; 
             return;
         }
     }
@@ -333,6 +333,24 @@ int loop(void *arg)
         if (event.flags & EV_EOF) {
             /* Simply close socket */
             ff_close(clientfd);
+
+            /* Get the associated host fd */
+            int host_fd = get_hostfd(fd_map, clientfd);
+            if (host_fd < 0){
+                printf("hostfd not found\n");
+                return -1;
+            }
+
+            /* Close host fd */
+            int ret = close(host_fd);
+            if (ret < 0) {
+                printf("close failed, hostfd:%d, errno:%d, %s\n", host_fd, errno, strerror(errno));
+                return -1;
+            }
+
+            /*Remove from fd pair */
+            remove_fd_pair(fd_map, host_fd);
+
 #ifdef INET6
         } else if (clientfd == sockfd || clientfd == sockfd6) {
 #else
