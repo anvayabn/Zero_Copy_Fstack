@@ -30,7 +30,7 @@ int sockfd;
 int sockfd6;
 #endif
 
-char html[] =
+char html0[] =
 "HTTP/1.1 200 OK\r\n"
 "Server: F-Stack\r\n"
 "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
@@ -41,7 +41,7 @@ char html[] =
 "Accept-Ranges: bytes\r\n"
 "\r\n";
 
-char html2[] =
+char html[] =
 "HTTP/1.1 200 OK\r\n"
 "Server: F-Stack\r\n"
 "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
@@ -71,7 +71,7 @@ char html2[] =
 "</html>";
 
 
-char html33[] =
+char html2[] =
 "HTTP/1.1 200 OK\r\n"
 "Server: F-Stack\r\n"
 "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
