@@ -46,6 +46,22 @@ char html[] =
 "Server: F-Stack\r\n"
 "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
 "Content-Type: text/html\r\n"
+"Content-Length: 73\r\n"
+"Connection: keep-alive\r\n"
+"Accept-Ranges: bytes\r\n"
+"\r\n"
+"<!DOCTYPE html>\r\n"
+"<html>\r\n"
+"<head>\r\n"
+"<title>Welcome</title>\r\n"
+"</head>\r\n"
+"</html>";
+
+char html1[] =
+"HTTP/1.1 200 OK\r\n"
+"Server: F-Stack\r\n"
+"Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+"Content-Type: text/html\r\n"
 "Content-Length: 363\r\n"
 "Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
 "Connection: keep-alive\r\n"
