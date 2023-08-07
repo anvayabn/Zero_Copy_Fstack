@@ -11,7 +11,7 @@ function usage() {
 }
 
 conf=config.ini
-bin=./example/helloworld
+bin=./example/hello_host
 
 while getopts "c:b:o:h" args
 do
