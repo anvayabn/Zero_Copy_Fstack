@@ -209,7 +209,7 @@ char html5[] =
 char *hostip = "192.168.1.1";
 uint16_t hostport = 8000;
 char *from_hostdata;
-size_t len_from_hostdata = 256;
+size_t len_from_hostdata = 158;
 int epfd;
 struct epoll_event host_events[MAX_EVENTS];
 struct epoll_event host_event;
@@ -223,7 +223,7 @@ struct fd_pair fd_map[MAX_CONNECTIONS] = {0};
 
 void add_fd_pair(struct fd_pair *map, int hostfd, int clientfd) {
     for (int i = 0; i < MAX_CONNECTIONS; i++) {
-        if (map[i].hostfd == 0 && map[i].clientfd == 0) {
+        if ((map[i].hostfd == 0 && map[i].clientfd == 0) || (map[i].hostfd == -1 && map[i].clientfd == -1)) {
             map[i].hostfd = hostfd;
             map[i].clientfd = clientfd;
             return;
@@ -279,7 +279,7 @@ int set_to_nonblocking(int hostfd){
 /* Connect to host */
 int connect_to_host(char *ip, uint16_t port){
     int i;
-    host_event.events = EPOLLIN | EPOLLOUT;
+    host_event.events = EPOLLOUT | EPOLLIN;
     int hostfd_local = socket(AF_INET, SOCK_STREAM, 0);
     if (hostfd_local < 0) {
         printf("socket failed, hostfd:%d, errno:%d, %s\n", hostfd_local, errno, strerror(errno));
@@ -313,13 +313,7 @@ int connect_to_host(char *ip, uint16_t port){
             return -1;
         }
     }
-
-    int num_ready = epoll_wait(epfd, host_events, MAX_EVENTS, 0);
-    if (num_ready < 0){
-        printf("epoll wait failed\n");
-        close(hostfd_local);
-        return -1;
-    }
+    
     return hostfd_local;
 }
 
@@ -339,6 +333,7 @@ int send_to_host(int hostfd, char *data, size_t len){
     }
     for (i = 0 ; i < num_ready; i++){
         if(host_events[i].events & EPOLLOUT){
+            printf("am i here\n");
             int bytes_sent = write(hostfd, data, len);
             if (bytes_sent < 0){
                 printf("send to host failed\n");
@@ -353,22 +348,32 @@ int send_to_host(int hostfd, char *data, size_t len){
 int read_from_host(int hostfd, char *data, size_t len){
     int i;
     int bytes_read = 0;
-    printf("The hostfd in read from host is %d\n", hostfd);
+
     if (hostfd < 0){
         printf("hostfd not initialized\n");
         return -1;
     }
+
     int num_ready = epoll_wait(epfd, host_events, MAX_EVENTS, 0);
     if (num_ready < 0){
         printf("epoll wait failed while reading\n");
         return -1;
     }
-    for (i = 0 ; i < num_ready; i++){
-        if(host_events[i].events & EPOLLIN){
+
+    for (i = 0; i < num_ready; i++){          
+        if(host_events[i].data.fd == hostfd && host_events[i].events & EPOLLIN ){
             bytes_read = read(hostfd, data, len);
             if (bytes_read < 0){
-                printf("read from host failed\n");
+                printf("here 1");
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    printf("No more data ready to be read\n");
+                    break; // Not necessarily an error
+                }
+                printf("read from host failed: %s\n", strerror(errno));
                 return -1;
+            } else if (bytes_read == 0) {
+                printf("Connection closed by host\n");
+                break;
             }
         }
     }
@@ -378,7 +383,6 @@ int read_from_host(int hostfd, char *data, size_t len){
 
 int loop(void *arg)
 {   
-    int received_from_host = 0; // doesnt work , alternative 
     /* Wait for events to happen */
     int nevents = ff_kevent(kq, NULL, 0, events, MAX_EVENTS, NULL);
     int i;
@@ -394,7 +398,7 @@ int loop(void *arg)
         int clientfd = (int)event.ident;
 
         /* Handle disconnect */
-        if (event.flags & EV_EOF && (received_from_host == 1)) {
+        if (event.flags & EV_EOF) {
             /* Simply close socket */
             ff_close(clientfd);
 
@@ -491,38 +495,34 @@ int loop(void *arg)
                 }
                 total_bytes_read += bytes_read;
             }
-            /*NOT REQUIRED - If the bytes are read update received variable*/
-            if (total_bytes_read > 0){
-                received_from_host = 1;
-            }
             printf("The contents of from_hostdata is %s\n", from_hostdata);
 
-            /* Free the buffer after use */
+            if (total_bytes_read > 0){
+                /* Get the rte_mbuf associated with the freebsd mbuf */
+                void *rteMbuf_void = ff_rte_frm_extcl(ptr);
+                struct rte_mbuf *rteMbuf = (struct rte_mbuf *)rteMbuf_void;
+
+                /* Detach the rte_mbuf from the freebsd mbuf fo that the free mbuf can be released */
+                ff_mbuf_detach_rte(ptr);
+                ff_mbuf_free(ptr);
+
+                /* Reset the rte_mbuf to default values */
+                rte_pktmbuf_reset(rteMbuf);
+                /* Get the pointer to data from the rte_mbuf */
+                char *data11 = rte_pktmbuf_mtod_offset(rteMbuf, char *, 0);
+
+                /*Replace the contents of data11 and update the pkt flags */
+                memcpy(data11, from_hostdata, total_bytes_read);
+                rteMbuf->data_len = total_bytes_read;
+                rteMbuf->pkt_len = total_bytes_read;
+                
+                /* Get a new freebsd mbuf with ext_arg set as the rte_mbf*/
+                void *bsd_mbuf = ff_mbuf_get(NULL, rteMbuf_void, (void*)data11, total_bytes_read);
+
+                /* Write the bsd_mbuf to the socket */
+                ff_write(clientfd, bsd_mbuf, total_bytes_read);
+            }
             free(from_hostdata);
-
-            /* Get the rte_mbuf associated with the freebsd mbuf */
-            void *rteMbuf_void = ff_rte_frm_extcl(ptr);
-            struct rte_mbuf *rteMbuf = (struct rte_mbuf *)rteMbuf_void;
-
-           /* Detach the rte_mbuf from the freebsd mbuf fo that the free mbuf can be released */
-            ff_mbuf_detach_rte(ptr);
-            ff_mbuf_free(ptr);
-
-            /* Reset the rte_mbuf to default values */
-            rte_pktmbuf_reset(rteMbuf);
-            /* Get the pointer to data from the rte_mbuf */
-            char *data11 = rte_pktmbuf_mtod_offset(rteMbuf, char *, 0);
-
-            /*Replace the contents of data11 and update the pkt flags */
-            memcpy(data11, html, sizeof(html) - 1);
-            rteMbuf->data_len = sizeof(html) - 1;
-            rteMbuf->pkt_len = sizeof(html) - 1;
-            
-            /* Get a new freebsd mbuf with ext_arg set as the rte_mbf*/
-            void *bsd_mbuf = ff_mbuf_get(NULL, rteMbuf_void, (void*)data11, sizeof(html) - 1);
-
-            /* Write the bsd_mbuf to the socket */
-            ff_write(clientfd, bsd_mbuf, sizeof(html) - 1);
         } else {
             printf("unknown event: %8.8X\n", event.flags);
         }
@@ -573,7 +573,7 @@ int main(int argc, char * argv[])
     ff_kevent(kq, &kevSet, 1, NULL, 0, NULL);
 
     /* Create a e-poll file descriptor for host id  */
-    epfd = epoll_create(MAX_EVENTS);
+    epfd = epoll_create(0);
 
 #ifdef INET6
     sockfd6 = ff_socket(AF_INET6, SOCK_STREAM, 0);
