@@ -208,7 +208,6 @@ char html5[] =
 /* Global variable to host socket */
 char *hostip = "192.168.1.1";
 uint16_t hostport = 8000;
-char *from_hostdata;
 size_t len_from_hostdata = 158;
 int epfd;
 struct epoll_event host_events[MAX_EVENTS];
@@ -279,7 +278,6 @@ int set_to_nonblocking(int hostfd){
 /* Connect to host */
 int connect_to_host(char *ip, uint16_t port){
     int i;
-    host_event.events = EPOLLOUT | EPOLLIN;
     int hostfd_local = socket(AF_INET, SOCK_STREAM, 0);
     if (hostfd_local < 0) {
         printf("socket failed, hostfd:%d, errno:%d, %s\n", hostfd_local, errno, strerror(errno));
@@ -291,7 +289,7 @@ int connect_to_host(char *ip, uint16_t port){
         close(hostfd_local);
         return -1;
     }
-
+    host_event.events = EPOLLOUT | EPOLLIN;
     host_event.data.fd = hostfd_local;
     /* Add to the e-poll */
     epoll_ctl(epfd, EPOLL_CTL_ADD, hostfd_local, &host_event);
@@ -313,18 +311,21 @@ int connect_to_host(char *ip, uint16_t port){
             return -1;
         }
     }
-    
+
     return hostfd_local;
 }
 
 /* Send to host */
-int send_to_host(int hostfd, char *data, size_t len){
+int send_to_host(int hostfd, char *data, size_t len, ){
     int i;
+    int bytes_sent = 0;
+    int bytes_read = 0;
     if (hostfd < 0){
-        if(connect_to_host(hostip, hostport) < 0){
-            printf("connect to host failed at branch 1\n");
-            return -1;
-        }
+        printf("hostfd not initialized\n");
+        // if(connect_to_host(hostip, hostport) < 0){
+        //     printf("connect to host failed at branch 1\n");
+        //     return -1;
+        // }
     }
     int num_ready = epoll_wait(epfd, host_events, MAX_EVENTS, 0);
     if (num_ready < 0){
@@ -334,14 +335,16 @@ int send_to_host(int hostfd, char *data, size_t len){
     for (i = 0 ; i < num_ready; i++){
         if(host_events[i].events & EPOLLOUT){
             printf("am i here\n");
-            int bytes_sent = write(hostfd, data, len);
+            bytes_sent = write(hostfd, data, len);
+            printf("The number of bytes sent to host is %d\n", bytes_sent);
             if (bytes_sent < 0){
                 printf("send to host failed\n");
                 return -1;
             }
+
         }
     }
-    return hostfd;
+    return bytes_sent;
 }
 
 /* Read from host */
@@ -354,28 +357,26 @@ int read_from_host(int hostfd, char *data, size_t len){
         return -1;
     }
 
-    int num_ready = epoll_wait(epfd, host_events, MAX_EVENTS, 0);
+    int num_ready = epoll_wait(epfd, host_events, MAX_EVENTS, 10000);
     if (num_ready < 0){
         printf("epoll wait failed while reading\n");
         return -1;
     }
-
+    printf("The number of events ready to be read from host is %d\n", num_ready);
+    printf("The hostfd is %d\n", hostfd);
     for (i = 0; i < num_ready; i++){          
-        if(host_events[i].data.fd == hostfd && host_events[i].events & EPOLLIN ){
+        printf("The hostfd is %d\n", host_events[i].data.fd);
+        printf("The events are %d\n", host_events[i].events);
+        if(host_events[i].data.fd == hostfd && host_events[i].events & EPOLLIN){
             bytes_read = read(hostfd, data, len);
             if (bytes_read < 0){
                 printf("here 1");
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     printf("No more data ready to be read\n");
-                    break; // Not necessarily an error
+                    break;
                 }
-                printf("read from host failed: %s\n", strerror(errno));
-                return -1;
-            } else if (bytes_read == 0) {
-                printf("Connection closed by host\n");
-                break;
             }
-        }
+        }    
     }
     printf("The number of bytes read from host is %d\n", bytes_read);
     return bytes_read;
@@ -479,22 +480,12 @@ int loop(void *arg)
             }
             printf("send was successful\n");
             /* Create buffer for reading data from the host */
-            from_hostdata = malloc(len_from_hostdata);
+            char *from_hostdata = malloc(len_from_hostdata);
 
             /* Read data from host */
             int total_bytes_read = 0;
-            while (total_bytes_read < len_from_hostdata) {
-                int bytes_read = read_from_host(host_fd, from_hostdata + total_bytes_read, (len_from_hostdata - total_bytes_read));
-                printf("bytes read %d\n", bytes_read);
-                if (bytes_read < 0){
-                    printf("read from host failed\n");
-                    free(from_hostdata);
-                    return -1;
-                } else if (bytes_read == 0) {
-                    break;
-                }
-                total_bytes_read += bytes_read;
-            }
+            total_bytes_read = read_from_host(host_fd, from_hostdata, len_from_hostdata);
+            
             printf("The contents of from_hostdata is %s\n", from_hostdata);
 
             if (total_bytes_read > 0){
@@ -573,7 +564,7 @@ int main(int argc, char * argv[])
     ff_kevent(kq, &kevSet, 1, NULL, 0, NULL);
 
     /* Create a e-poll file descriptor for host id  */
-    epfd = epoll_create(0);
+    epfd = epoll_create(MAX_EVENTS);
 
 #ifdef INET6
     sockfd6 = ff_socket(AF_INET6, SOCK_STREAM, 0);
