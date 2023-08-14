@@ -1,0 +1,2105 @@
+diff --git a/.gitignore b/.gitignore
+index 2010aba5..048599a4 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -32,5 +32,3 @@ dpdk/.travis.yml
+ .code.yml
+ .orange-ci.yml
+ SMEDockerfile
+-output*
+-*.pcap
+\ No newline at end of file
+diff --git a/example/Commands .md b/example/Commands .md
+new file mode 100644
+index 00000000..f83d8fb4
+--- /dev/null
++++ b/example/Commands .md	
+@@ -0,0 +1,2 @@
++# Commands 
++
+diff --git a/example/Makefile b/example/Makefile
+index c708e2bd..77d413d9 100644
+--- a/example/Makefile
++++ b/example/Makefile
+@@ -16,20 +16,11 @@ LIBS+= $(shell $(PKGCONF) --static --libs libdpdk)
+ LIBS+= -L${FF_PATH}/lib -Wl,--whole-archive,-lfstack,--no-whole-archive
+ LIBS+= -Wl,--no-whole-archive -lrt -lm -ldl -lcrypto -pthread -lnuma
+ 
+-TARGET="helloworld" 
++TARGET="helloworld"
+ all:
+-	# # cc ${CFLAGS} -o ${TARGET}_epoll main_epoll.c ${LIBS}
+-	# cc ${CFLAGS} -o ${TARGET}_zc main_zc.c ${LIBS}
+-	cc ${CFLAGS} -o ${TARGET} main.c ${LIBS}
+-	cc ${CFLAGS} -o hello_newrte main_newRte.c ${LIBS}
+-	cc ${CFLAGS} -o hello_client main_client.c ${LIBS}
+-	cc ${CFLAGS} -o hello_host main_host.c ${LIBS}
++	cc ${CFLAGS} -DINET6 -o ${TARGET} main.c ${LIBS}
++	cc ${CFLAGS} -o ${TARGET}_epoll main_epoll.c ${LIBS}
+ 
+ .PHONY: clean
+ clean:
+-	rm -f *.o ${TARGET} 
+-	# rm -f *.o ${TARGET}_epoll
+-	# rm -f *.o ${TARGET}_zc
+-	rm -f *.o hello_newrte
+-	rm -f *.o hello_client
+-	rm -f *.o hello_host
+\ No newline at end of file
++	rm -f *.o ${TARGET} ${TARGET}_epoll
+diff --git a/example/dummy_server.py b/example/dummy_server.py
+deleted file mode 100644
+index fee4b9b9..00000000
+--- a/example/dummy_server.py
++++ /dev/null
+@@ -1,19 +0,0 @@
+-from http.server import SimpleHTTPRequestHandler, HTTPServer
+-
+-class MyHandler(SimpleHTTPRequestHandler):
+-    def do_GET(self):
+-        content = b'Small data payload'
+-        self.send_response(200)
+-        self.send_header('Content-type', 'text/plain')
+-        self.send_header('Content-Length', len(content))
+-        self.end_headers()
+-        self.wfile.write(content)
+-
+-def run(server_class=HTTPServer, handler_class=MyHandler):
+-    server_address = ('192.168.1.1', 8000) # Change IP address as needed
+-    httpd = server_class(server_address, handler_class)
+-    print(f'Serving HTTP on {server_address[0]} port {server_address[1]} ...')
+-    httpd.serve_forever()
+-
+-if __name__ == '__main__':
+-    run()
+\ No newline at end of file
+diff --git a/example/main.c b/example/main.c
+index ea87def2..4460cc5e 100644
+--- a/example/main.c
++++ b/example/main.c
+@@ -12,13 +12,9 @@
+ 
+ #include "../lib/ff_config.h"
+ #include "../lib/ff_api.h"
+-#include "../lib/ff_veth.h"
+-
+-/* dpdk libraries for manipulating the rte_mbuf */
+-#include "../dpdk/lib/mbuf/rte_mbuf.h"
+-#include "../dpdk/lib/mbuf/rte_mbuf_core.h"
+ 
+ #define MAX_EVENTS 512
++
+ /* kevent set */
+ struct kevent kevSet;
+ /* events */
+@@ -30,40 +26,23 @@ int sockfd;
+ int sockfd6;
+ #endif
+ 
++
+ char html[] =
+ "HTTP/1.1 200 OK\r\n"
+ "Server: F-Stack\r\n"
+ "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+ "Content-Type: text/html\r\n"
+ "Content-Length: 0\r\n"
+-"Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+ "Connection: keep-alive\r\n"
+ "Accept-Ranges: bytes\r\n"
+ "\r\n";
+ 
+-char html0[] =
+-"HTTP/1.1 200 OK\r\n"
+-"Server: F-Stack\r\n"
+-"Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+-"Content-Type: text/html\r\n"
+-"Content-Length: 73\r\n"
+-"Connection: keep-alive\r\n"
+-"Accept-Ranges: bytes\r\n"
+-"\r\n"
+-"<!DOCTYPE html>\r\n"
+-"<html>\r\n"
+-"<head>\r\n"
+-"<title>Welcome</title>\r\n"
+-"</head>\r\n"
+-"</html>";
+-
+ char html1[] =
+ "HTTP/1.1 200 OK\r\n"
+ "Server: F-Stack\r\n"
+ "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+ "Content-Type: text/html\r\n"
+ "Content-Length: 363\r\n"
+-"Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+ "Connection: keep-alive\r\n"
+ "Accept-Ranges: bytes\r\n"
+ "\r\n"
+@@ -94,7 +73,7 @@ char html2[] =
+ "Content-Type: text/html\r\n"
+ "Content-Length: 438\r\n"
+ "Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+-"Connection: keep-alive\r\n"
++"Connection: Keep-Alive\r\n"
+ "Accept-Ranges: bytes\r\n"
+ "\r\n"
+ "<!DOCTYPE html>\r\n"
+@@ -214,8 +193,6 @@ char html5[] =
+ "</body>\r\n"
+ "</html>";
+ 
+-void *ptr;  
+-
+ int loop(void *arg)
+ {
+     /* Wait for events to happen */
+@@ -262,41 +239,14 @@ int loop(void *arg)
+                 available--;
+             } while (available);
+         } else if (event.filter == EVFILT_READ) {
+-            size_t nbytes=256;
+-
+-            /*Allocate double pointer to pass to the ff_read*/ 
+-            ptr = NULL;  
+-            void **ptr1 = &ptr;
+-
+-            /* Pass the **ptr to ff_read */
+-            ssize_t readlen = ff_read(clientfd, ptr1, nbytes);
+-
+-            /* Get the pointer to data from the freebsd mbuf */
+-            char *data = (char *) ff_mbuf_mtod(ptr);
+-
+-            /* Get the rte_mbuf associated with the freebsd mbuf */
+-            void *rteMbuf_void = ff_rte_frm_extcl(ptr);
+-            struct rte_mbuf *rteMbuf = (struct rte_mbuf *)rteMbuf_void;
+-
+-           /* Detach the rte_mbuf from the freebsd mbuf fo that the free mbuf can be released */
+-            ff_mbuf_detach_rte(ptr);
+-            ff_mbuf_free(ptr);
+-
+-            /* Reset the rte_mbuf to default values */
+-            rte_pktmbuf_reset(rteMbuf);
+-            /* Get the pointer to data from the rte_mbuf */
+-            char *data11 = rte_pktmbuf_mtod_offset(rteMbuf, char *, 0);
+-
+-            /*Replace the contents of data11 and update the pkt flags */
+-            memcpy(data11, html, sizeof(html) - 1);
+-            rteMbuf->data_len = sizeof(html) - 1;
+-            rteMbuf->pkt_len = sizeof(html) - 1;
+-            
+-            /* Get a new freebsd mbuf with ext_arg set as the rte_mbf*/
+-            void *bsd_mbuf = ff_mbuf_get(NULL, rteMbuf_void, (void*)data11, sizeof(html) - 1);
+-
+-            /* Write the bsd_mbuf to the socket */
+-            ff_write(clientfd, bsd_mbuf, sizeof(html) - 1);
++            char buf[256];
++            ssize_t readlen = ff_read(clientfd, buf, sizeof(buf));
++            ssize_t writelen = ff_write(clientfd, html, sizeof(html) - 1);
++            if (writelen < 0){
++                printf("ff_write failed:%d, %s\n", errno,
++                    strerror(errno));
++                ff_close(clientfd);
++            }
+         } else {
+             printf("unknown event: %8.8X\n", event.flags);
+         }
+@@ -382,4 +332,4 @@ int main(int argc, char * argv[])
+ 
+     ff_run(loop, NULL);
+     return 0;
+-}
+\ No newline at end of file
++}
+diff --git a/example/main_client.c b/example/main_client.c
+deleted file mode 100644
+index 42fbcea3..00000000
+--- a/example/main_client.c
++++ /dev/null
+@@ -1,203 +0,0 @@
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <stdint.h>
+-#include <string.h>
+-#include <strings.h>
+-#include <sys/types.h>
+-#include <sys/socket.h>
+-#include <arpa/inet.h>
+-#include <errno.h>
+-#include <assert.h>
+-#include <sys/ioctl.h>
+-#include "../lib/ff_config.h"
+-#include "../lib/ff_api.h"
+-#include "../lib/ff_veth.h"
+-#include "../dpdk/lib/mbuf/rte_mbuf.h"
+-#include "../dpdk/lib/mbuf/rte_mbuf_core.h"
+-
+-#define MAX_EVENTS 512
+-
+-int sockfd;
+-int request_sent = 0;
+-int received = 0;
+-int kq;
+-size_t nbytes=147;
+-struct kevent ke;
+-struct kevent events[MAX_EVENTS];
+-
+-const char* request =
+-"GET / HTTP/1.1\r\n"
+-"Host: 10.10.1.2\r\n"
+-"User-Agent: f-stack/7.47.0\r\n"
+-"Accept: */*\r\n"
+-"\r\n";
+-
+-int loop(void *arg) {
+-
+-    /* Wait for events to happen */
+-    int nevents = ff_kevent(kq, NULL, 0, events, MAX_EVENTS, NULL);
+-
+-    if (nevents < 0) {
+-        printf("ff_kevent failed:%d, %s\n", errno,
+-               strerror(errno));
+-        return -1;
+-    }
+-
+-    /* Iterating over all the events */
+-    for(int i = 0; i < nevents; i++) {
+-        struct kevent event = events[i];
+-        int clientfd = (int)event.ident;
+-        
+-        /* Todo:: Handle diconnects and error */
+-
+-
+-        // /* Handle disconnect */
+-        // if (event.flags & EV_EOF) {
+-        //     /* Simply close socket */
+-        //     ff_close(clientfd);
+-        // }
+-        // if (request_sent == 1 && received == 1){
+-        //     ff_close(clientfd);
+-        // }
+-
+-        /* Handle write event */
+-        if (event.filter == EVFILT_WRITE && request_sent != 1) {
+-            unsigned lcore_id = rte_lcore_id();
+-            unsigned socketid = rte_lcore_to_socket_id(lcore_id);
+-            char s[64];
+-            snprintf(s, sizeof(s), "mbuf_pool_%d", socketid);
+-            struct rte_mempool *mp = rte_mempool_lookup(s);
+-
+-            if (!mp) {
+-                printf("Cannot get memory pool.\n");
+-                return -1;
+-            }
+-
+-            struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
+-            if (!m) {
+-                printf("Cannot allocate mbuf.\n");
+-                return -1;
+-            }
+-            char *data11 = rte_pktmbuf_mtod_offset(m, char *, 0);
+-            printf("data11 points to %p\n", data11);
+-            memcpy(data11, request, strlen(request));
+-            m->data_len = strlen(request);
+-            m->pkt_len = strlen(request);
+-            
+-            void *bsd_mbuf = ff_mbuf_get(NULL, (void *)m, (void*)data11, strlen(request));
+-            printf("The bsd_mbuf is %p\n", bsd_mbuf);
+-            
+-            char *tmp = (char *) ff_mbuf_mtod(bsd_mbuf);
+-            printf("tmp points to %p\n", tmp);
+-            
+-            void *temprte = ff_rte_frm_extcl(bsd_mbuf);
+-            printf("temprte points to %p\n", temprte);
+-            if (ff_write(clientfd, bsd_mbuf, strlen(request)) < 0) {
+-                printf("ff_write failed, errno:%d, %s\n", errno, strerror(errno));
+-                rte_pktmbuf_free(m);
+-                return -1;
+-            }
+-            request_sent = 1;    
+-
+-            EV_SET(&ke, clientfd, EVFILT_READ , EV_ADD, 0, MAX_EVENTS, NULL);
+-            if(ff_kevent(kq, &ke, 1, NULL, 0, NULL) < 0) {
+-                printf("ff_kevent error:%d, %s\n", errno,
+-                    strerror(errno));
+-                return -1;
+-            }
+-
+-        } 
+-        if (event.filter == EVFILT_READ && request_sent == 1 && received == 0){
+-            /*Allocate double pointer to pass to the ff_read*/ 
+-            void *ptr=NULL;  
+-            void **ptr1 = &ptr;
+-            printf("Before Read ptr points to %p\n", ptr);    
+-            /* Pass the **ptr to ff_read */
+-            ssize_t readlen = ff_read(clientfd, ptr1, nbytes);
+-            if (readlen < 0) {
+-                printf("ff_read failed, errno:%d, %s\n", errno, strerror(errno));
+-                return -1;
+-            }
+-            nbytes -= readlen;
+-            printf("nbytes is %ld\n", nbytes);
+-            printf("readlen is %ld\n", readlen);
+-            /* The pointer here points to the free bsd mbuf containing the */
+-            printf("After Read ptr points to %p\n", ptr);
+-            /* Get the pointer to data from the freebsd mbuf */
+-            char *data = (char *) ff_mbuf_mtod(ptr);
+-            printf("Daata points to %p\n", data);
+-            for (ssize_t i = 0; i < readlen; ++i) {
+-                printf("%c", data[i]);
+-            }
+-            printf("\n"); 
+-            if (readlen == 0){
+-                break;
+-            }
+-            /* Simulate the application load should be changed ... not sure if it required */
+-            int i, j = 0;
+-            for (i = 0; i < 10000; i++){
+-                j++;
+-            }            
+-        } 
+-        if (nbytes == 0){
+-            received = 1;
+-            break;
+-        }
+-        
+-        
+-    }
+-    return 0;
+-}
+-
+- 
+-
+-int main(int argc, char *argv[]) 
+-{   
+-    /* Initialize f-stack and dpdk */
+-    ff_init(argc, argv);
+-
+-    /* Create a kqueue */
+-    kq = ff_kqueue();
+-    if (kq < 0) {
+-        printf("ff_kqueue failed, errno:%d, %s\n", errno, strerror(errno));
+-        return -1;
+-    }
+-
+-    /* Create a socket for connection Request */
+-    sockfd = ff_socket(AF_INET, SOCK_STREAM, 0);
+-    if (sockfd < 0) {
+-        printf("ff_socket failed, errno:%d, %s\n", errno, strerror(errno));
+-        return -1;
+-    }
+-
+-    /* Set non Blocking and initiate Client Connection */
+-    if (sockfd > 0){
+-        int on = 1; 
+-        ff_ioctl(sockfd, FIONBIO, &on);
+-        struct sockaddr_in my_addr;
+-        bzero(&my_addr, sizeof(my_addr));
+-        my_addr.sin_family = AF_INET;
+-        my_addr.sin_port = htons(80);
+-        const char *ip = "10.10.1.2";
+-        inet_pton(AF_INET, ip, &(my_addr.sin_addr));
+-
+-        int ret = ff_connect(sockfd,(struct linux_sockaddr *)&my_addr,sizeof(struct sockaddr_in));
+-        if (ret < 0 && errno != EINPROGRESS && errno != EISCONN)
+-           printf("conn failed, sockfd = %d,ret=%d,%d,%s\n",sockfd,ret,errno,strerror(errno));
+-        else 
+-            printf("conn suc\n");
+-        printf("create_socket_cn sockfd = %d,ret=%d,%d,%s\n",sockfd,ret,errno,strerror(errno));
+-    }
+-
+-    
+-    EV_SET(&ke, sockfd, EVFILT_WRITE , EV_ADD, 0, MAX_EVENTS, NULL);
+-    assert(kq  > 0);
+-    /* Update kqueue */
+-    ff_kevent(kq, &ke, 1, NULL, 0, NULL);
+-
+-    ff_run(loop, NULL);
+-
+-    ff_close(sockfd);
+-
+-    return 0;
+-}
+diff --git a/example/main_host.c b/example/main_host.c
+deleted file mode 100644
+index f4eafc29..00000000
+--- a/example/main_host.c
++++ /dev/null
+@@ -1,595 +0,0 @@
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <stdint.h>
+-#include <string.h>
+-#include <strings.h>
+-#include <sys/types.h>
+-#include <sys/socket.h>
+-#include <arpa/inet.h>
+-#include <errno.h>
+-#include <assert.h>
+-#include <sys/ioctl.h>
+-
+-// to send to host
+-#include <unistd.h>
+-#include <fcntl.h>
+-#include <sys/epoll.h>
+-
+-#include "../lib/ff_config.h"
+-#include "../lib/ff_api.h"
+-#include "../lib/ff_veth.h"
+-
+-/* dpdk libraries for manipulating the rte_mbuf */
+-#include "../dpdk/lib/mbuf/rte_mbuf.h"
+-#include "../dpdk/lib/mbuf/rte_mbuf_core.h"
+-
+-#define MAX_EVENTS 512
+-/* kevent set */
+-struct kevent kevSet;
+-/* events */
+-struct kevent events[MAX_EVENTS];
+-/* kq */
+-int kq;
+-int sockfd;
+-void *ptr;
+-#ifdef INET6
+-int sockfd6;
+-#endif
+-
+-char html[] =
+-    "HTTP/1.1 200 OK\r\n"
+-    "Server: F-Stack\r\n"
+-    "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+-    "Content-Type: text/html\r\n"
+-    "Content-Length: 0\r\n"
+-    "Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+-    "Connection: keep-alive\r\n"
+-    "Accept-Ranges: bytes\r\n"
+-    "\r\n";
+-
+-char html2[] =
+-    "HTTP/1.1 200 OK\r\n"
+-    "Server: F-Stack\r\n"
+-    "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+-    "Content-Type: text/html\r\n"
+-    "Content-Length: 363\r\n"
+-    "Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+-    "Connection: keep-alive\r\n"
+-    "Accept-Ranges: bytes\r\n"
+-    "\r\n"
+-    "<!DOCTYPE html>\r\n"
+-    "<html>\r\n"
+-    "<head>\r\n"
+-    "<title>Welcome to F-Stack!</title>\r\n"
+-    "<style>\r\n"
+-    "    body {  \r\n"
+-    "        width: 35em;\r\n"
+-    "        margin: 0 auto; \r\n"
+-    "        font-family: Tahoma, Verdana, Arial, sans-serif;\r\n"
+-    "    }\r\n"
+-    "</style>\r\n"
+-    "</head>\r\n"
+-    "<body>\r\n"
+-    "<h1>Welcome to F-Stack!</h1>\r\n"
+-    "<h2>Alice's Adventures in Wonderland</h2>\r\n"
+-    "<h3>Chapter I: Down the Rabbit-Hole</h3>\r\n"
+-    "</body>\r\n"
+-    "</html>";
+-
+-char html33[] =
+-    "HTTP/1.1 200 OK\r\n"
+-    "Server: F-Stack\r\n"
+-    "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+-    "Content-Type: text/html\r\n"
+-    "Content-Length: 438\r\n"
+-    "Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+-    "Connection: keep-alive\r\n"
+-    "Accept-Ranges: bytes\r\n"
+-    "\r\n"
+-    "<!DOCTYPE html>\r\n"
+-    "<html>\r\n"
+-    "<head>\r\n"
+-    "<title>Welcome to F-Stack!</title>\r\n"
+-    "<style>\r\n"
+-    "    body {  \r\n"
+-    "        width: 35em;\r\n"
+-    "        margin: 0 auto; \r\n"
+-    "        font-family: Tahoma, Verdana, Arial, sans-serif;\r\n"
+-    "    }\r\n"
+-    "</style>\r\n"
+-    "</head>\r\n"
+-    "<body>\r\n"
+-    "<h1>Welcome to F-Stack!</h1>\r\n"
+-    "\r\n"
+-    "<p>For online documentation and support please refer to\r\n"
+-    "<a href=\"http://F-Stack.org/\">F-Stack.org</a>.<br/>\r\n"
+-    "\r\n"
+-    "<p><em>Thank you for using F-Stack.</em></p>\r\n"
+-    "</body>\r\n"
+-    "</html>";
+-
+-char html3[] =
+-    "HTTP/1.1 200 OK\r\n"
+-    "Server: F-Stack\r\n"
+-    "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+-    "Content-Type: text/html\r\n"
+-    "Content-Length: 703\r\n"
+-    "Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+-    "Connection: keep-alive\r\n"
+-    "Accept-Ranges: bytes\r\n"
+-    "\r\n"
+-    "<!DOCTYPE html>\r\n"
+-    "<html>\r\n"
+-    "<head>\r\n"
+-    "<title>Welcome to F-Stack!</title>\r\n"
+-    "<style>\r\n"
+-    "    body {  \r\n"
+-    "        width: 35em;\r\n"
+-    "        margin: 0 auto; \r\n"
+-    "        font-family: Tahoma, Verdana, Arial, sans-serif;\r\n"
+-    "    }\r\n"
+-    "</style>\r\n"
+-    "</head>\r\n"
+-    "<body>\r\n"
+-    "<h1>Welcome to F-Stack!</h1>\r\n"
+-    "<h2>Alice's Adventures in Wonderland</h2>\r\n"
+-    "<h3>Chapter I: Down the Rabbit-Hole</h3>\r\n"
+-    "<p>So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the sound of making daisy-chains would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.</p>\r\n"
+-    "<p><em>Thank you for using F-Stack.</em></p>\r\n"
+-    "</body>\r\n"
+-    "</html>";
+-
+-char html4[] =
+-    "HTTP/1.1 200 OK\r\n"
+-    "Server: F-Stack\r\n"
+-    "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+-    "Content-Type: text/html\r\n"
+-    "Content-Length: 1021\r\n"
+-    "Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+-    "Connection: keep-alive\r\n"
+-    "Accept-Ranges: bytes\r\n"
+-    "\r\n"
+-    "<!DOCTYPE html>\r\n"
+-    "<html>\r\n"
+-    "<head>\r\n"
+-    "<title>Welcome to F-Stack!</title>\r\n"
+-    "<style>\r\n"
+-    "    body {  \r\n"
+-    "        width: 35em;\r\n"
+-    "        margin: 0 auto; \r\n"
+-    "        font-family: Tahoma, Verdana, Arial, sans-serif;\r\n"
+-    "    }\r\n"
+-    "</style>\r\n"
+-    "</head>\r\n"
+-    "<body>\r\n"
+-    "<h1>Welcome to F-Stack!</h1>\r\n"
+-    "<h2>Alice's Adventures in Wonderland</h2>\r\n"
+-    "<h3>Chapter I: Down the Rabbit-Hole</h3>\r\n"
+-    "<p>Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, ‘and what is the use of a book,’ thought Alice ‘without pictures or conversation?’</p>\r\n"
+-    "<p>So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the sound of making daisy-chains would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.</p>\r\n"
+-    "<p><em>Thank you for using F-Stack.</em></p>\r\n"
+-    "</body>\r\n"
+-    "</html>";
+-
+-char html5[] =
+-    "HTTP/1.1 200 OK\r\n"
+-    "Server: F-Stack\r\n"
+-    "Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+-    "Content-Type: text/html\r\n"
+-    "Content-Length: 1222\r\n"
+-    "Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+-    "Connection: keep-alive\r\n"
+-    "Accept-Ranges: bytes\r\n"
+-    "\r\n"
+-    "<!DOCTYPE html>\r\n"
+-    "<html>\r\n"
+-    "<head>\r\n"
+-    "<title>Welcome to F-Stack!</title>\r\n"
+-    "<style>\r\n"
+-    "    body {  \r\n"
+-    "        width: 35em;\r\n"
+-    "        margin: 0 auto; \r\n"
+-    "        font-family: Tahoma, Verdana, Arial, sans-serif;\r\n"
+-    "    }\r\n"
+-    "</style>\r\n"
+-    "</head>\r\n"
+-    "<body>\r\n"
+-    "<h1>Welcome to F-Stack!</h1>\r\n"
+-    "<p>Alice was beginning to get get shs scdcd by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, ‘and what is the use of a book,’ thought Alice ‘without pictures or conversation?’</p>\r\n"
+-    "<p>So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the sound of making daisy-chains would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.</p>\r\n"
+-    "<p>So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the sound of making daisy-chains would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.</p>\r\n"
+-    "<p><em>Thank you for using F-Stack.</em></p>\r\n"
+-    "</body>\r\n"
+-    "</html>";
+-
+-/* Global variable to host socket */
+-char *hostip = "192.168.1.1";
+-uint16_t hostport = 8000;
+-size_t len_from_hostdata = 158;
+-int epfd;
+-struct epoll_event host_events[MAX_EVENTS];
+-struct epoll_event host_event;
+-
+-int loop_num = 0;
+-struct fd_pair
+-{
+-    int hostfd;
+-    int clientfd;
+-};
+-#define MAX_CONNECTIONS 1024
+-struct fd_pair fd_map[MAX_CONNECTIONS] = {0};
+-
+-void add_fd_pair(struct fd_pair *map, int hostfd, int clientfd)
+-{
+-    for (int i = 0; i < MAX_CONNECTIONS; i++)
+-    {
+-        if ((map[i].hostfd == 0 && map[i].clientfd == 0) || (map[i].hostfd == -1 && map[i].clientfd == -1))
+-        {
+-            map[i].hostfd = hostfd;
+-            map[i].clientfd = clientfd;
+-            return;
+-        }
+-    }
+-    printf("Map is full, cannot add new pair\n");
+-}
+-
+-void remove_fd_pair(struct fd_pair *map, int hostfd)
+-{
+-    for (int i = 0; i < MAX_CONNECTIONS; i++)
+-    {
+-        if (map[i].hostfd == hostfd)
+-        {
+-            map[i].hostfd = -1;
+-            map[i].clientfd = -1;
+-            return;
+-        }
+-    }
+-    printf("Pair not found in map\n");
+-}
+-
+-int get_hostfd(struct fd_pair *map, int clientfd)
+-{
+-    for (int i = 0; i < MAX_CONNECTIONS; i++)
+-    {
+-        if (map[i].clientfd == clientfd)
+-        {
+-            return map[i].hostfd;
+-        }
+-    }
+-    return -1;
+-}
+-
+-int get_clientfd(struct fd_pair *map, int hostfd)
+-{
+-    for (int i = 0; i < MAX_CONNECTIONS; i++)
+-    {
+-        if (map[i].hostfd == hostfd)
+-        {
+-            return map[i].clientfd;
+-        }
+-    }
+-    return -1;
+-}
+-/* Set the socket descriptor to non-blocking */
+-int set_to_nonblocking(int hostfd)
+-{
+-    int flags = fcntl(hostfd, F_GETFL, 0);
+-    if (flags == -1)
+-    {
+-        printf("fcntl failed\n");
+-        return -1;
+-    }
+-    flags |= O_NONBLOCK;
+-    int s = fcntl(hostfd, F_SETFL, flags);
+-    if (s == -1)
+-    {
+-        printf("fcntl failed\n");
+-        return -1;
+-    }
+-    return 0;
+-}
+-
+-/* Connect to host */
+-int connect_to_host(char *ip, uint16_t port)
+-{
+-    int i;
+-    int hostfd_local = socket(AF_INET, SOCK_STREAM, 0);
+-    if (hostfd_local < 0)
+-    {
+-        printf("socket failed, hostfd:%d, errno:%d, %s\n", hostfd_local, errno, strerror(errno));
+-        exit(1);
+-    }
+-    int ret = set_to_nonblocking(hostfd_local);
+-    if (ret < 0)
+-    {
+-        printf("set to non blocking failed\n");
+-        close(hostfd_local);
+-        return -1;
+-    }
+-    host_event.events = EPOLLIN;
+-    host_event.data.fd = hostfd_local;
+-    /* Add to the e-poll */
+-    epoll_ctl(epfd, EPOLL_CTL_ADD, hostfd_local, &host_event);
+-    struct sockaddr_in host_addr;
+-    bzero(&host_addr, sizeof(host_addr));
+-
+-    host_addr.sin_family = AF_INET;
+-    host_addr.sin_port = htons(port);
+-    if (inet_pton(AF_INET, ip, &host_addr.sin_addr) <= 0)
+-    {
+-        perror("Failed to set server address\n");
+-        close(hostfd_local);
+-        return -1;
+-    }
+-
+-    if (connect(hostfd_local, (struct sockaddr *)&host_addr, sizeof(host_addr)) < 0)
+-    {
+-        if (errno != EINPROGRESS)
+-        {
+-            printf("connect failed, hostfd:%d, errno:%d, %s\n", hostfd_local, errno, strerror(errno));
+-            close(hostfd_local);
+-            return -1;
+-        }
+-    }
+-
+-    return hostfd_local;
+-}
+-
+-int loop(void *arg)
+-{
+-    /* Scan for events on the kq*/
+-    int nevents = ff_kevent(kq, NULL, 0, events, MAX_EVENTS, NULL);
+-    if (nevents < 0)
+-    {
+-        printf("ff_kevent failed:%d, %s\n", errno, strerror(errno));
+-        exit(1);
+-    }
+-    /* Loop on the event notification provided by the kq */
+-    int i;
+-    for (i = 0; i < nevents; ++i)
+-    {
+-        printf("nevents is %d\n", nevents);
+-        loop_num++;
+-        printf("loop is %d\n", loop_num);
+-        struct kevent event = events[i];
+-        int clientfd = (int)event.ident;
+-
+-        /* If end of flag noticed on fstack socket close the fd*/
+-        if (event.flags & EV_EOF)
+-        {
+-            /* Simply close socket */
+-            ff_close(clientfd);
+-
+-            /* Get the associated host fd */
+-            int host_fd = get_hostfd(fd_map, clientfd);
+-            if (host_fd < 0)
+-            {
+-                printf("hostfd not found\n");
+-                return -1;
+-            }
+-
+-            /* Close host fd */
+-            int ret = close(host_fd);
+-            if (ret < 0)
+-            {
+-                printf("close failed, hostfd:%d, errno:%d, %s\n", host_fd, errno, strerror(errno));
+-                return -1;
+-            }
+-            printf("Closed hostfd %d\n", host_fd);
+-            /*Remove from fd pair */
+-            remove_fd_pair(fd_map, host_fd);
+-            goto ret;
+-        }
+-        else if (clientfd == sockfd)
+-        {
+-            int available = (int)event.data;
+-            do
+-            {
+-                printf("Accepting Connection \n");
+-                int nclientfd = ff_accept(clientfd, NULL, NULL);
+-                if (nclientfd < 0)
+-                {
+-                    printf("ff_accept failed, clientfd:%d, errno:%d, %s\n", clientfd, errno, strerror(errno));
+-                    break;
+-                }
+-
+-                /* Create connection to host and map the hostfd to clientfd */
+-                int host_fd = connect_to_host(hostip, hostport);
+-                if (host_fd < 0)
+-                {
+-                    printf("connect to host failed\n");
+-                    break;
+-                }
+-                add_fd_pair(fd_map, host_fd, nclientfd);
+-
+-                EV_SET(&kevSet, nclientfd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+-
+-                if (ff_kevent(kq, &kevSet, 1, NULL, 0, NULL) < 0)
+-                {
+-                    printf("ff_kevent error:%d, %s\n", errno,
+-                           strerror(errno));
+-                    return -1;
+-                }
+-
+-                available--;
+-            } while (available);
+-            goto ret;
+-        }
+-        else if (event.filter == EVFILT_READ)
+-        {
+-            size_t nbytes = 256;
+-            printf("in EVILT_READ\n");
+-
+-            /* Allocate double pointer to pass to the ff_read*/
+-            ptr = NULL;
+-            void **ptr1 = &ptr;
+-
+-            /* Pass the **ptr to ff_read */
+-            ssize_t readlen = ff_read(clientfd, ptr1, nbytes);
+-            if (readlen < 0)
+-            {
+-                printf("ff_read failed, clientfd:%d, errno:%d, %s\n", clientfd, errno, strerror(errno));
+-                break;
+-            }
+-            /* Get the pointer to data from the freebsd mbuf */
+-            char *data = (char *)ff_mbuf_mtod(ptr);
+-
+-            /* Immediently try to send to host */
+-            int hostfd = get_hostfd(fd_map, clientfd);
+-            if (hostfd < 0)
+-            {
+-                printf("hostfd not initialized\n");
+-                break;
+-            }
+-            int bytes_sent = write(hostfd, data, readlen);
+-            if (bytes_sent < 0)
+-            {
+-                printf("send to host failed\n");
+-                break;
+-            }
+-            printf("The number of bytes sent to host is %d\n", bytes_sent);
+-        }
+-        else
+-        {
+-            printf("unknown event: %8.8X\n", event.flags);
+-        }
+-    }
+-
+-    int nhostfd = epoll_wait(epfd, host_events, MAX_EVENTS, 0);
+-    if (nhostfd < 0)
+-    {
+-        printf("epoll wait failed\n");
+-        return -1;
+-    }
+-    int j;
+-    for (j = 0; j < nhostfd; ++j)
+-    {
+-        printf("nhostfd is %d\n", nhostfd);
+-        struct epoll_event ev = host_events[j];
+-        int hostfd = ev.data.fd;
+-        // if read event on hostfd
+-        if (ev.events & EPOLLIN)
+-        {
+-            printf("in EPOLLIN\n");
+-            char *host_data = (char *)malloc(len_from_hostdata);
+-            int bytes_read = read(hostfd, host_data, len_from_hostdata);
+-            printf("The number of bytes read from host is %d\n", bytes_read);
+-            if (bytes_read < 0)
+-            {
+-                printf("read from host failed\n");
+-                break;
+-            }
+-
+-            /* Get the clientfd using the hostfd */
+-            int clientfd = get_clientfd(fd_map, hostfd);
+-            if (clientfd < 0)
+-            {
+-                printf("clientfd not initialized\n");
+-                break;
+-            }
+-            if (bytes_read > 0)
+-            {
+-                /*Allocate new rte_mbuf from mempool*/
+-                unsigned lcore_id = rte_lcore_id();
+-                unsigned socketid = rte_lcore_to_socket_id(lcore_id);
+-                char s[64];
+-                snprintf(s, sizeof(s), "mbuf_pool_%d", socketid);
+-                struct rte_mempool *mp = rte_mempool_lookup(s);
+-
+-                if (!mp)
+-                {
+-                    printf("Cannot get memory pool.\n");
+-                    return -1;
+-                }
+-
+-                struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
+-                if (!m)
+-                {
+-                    printf("Cannot allocate mbuf.\n");
+-                    return -1;
+-                }
+-
+-                /*Get data pointer of the rte_mbuf*/
+-                char *data11 = rte_pktmbuf_mtod_offset(m, char *, 0);
+-
+-                /*Replace the contents of data11 and update the pkt flags */
+-                memcpy(data11, host_data, bytes_read);
+-                m->data_len = bytes_read;
+-                m->pkt_len = bytes_read;
+-
+-                /* Get a new freebsd mbuf with ext_arg set as the new_rte_mbf*/
+-                void *bsd_mbuf = ff_mbuf_get(NULL, (void *)m, (void *)data11, bytes_read);
+-
+-                /* Write the bsd_mbuf to the socket */
+-                int ret = ff_write(clientfd, bsd_mbuf, bytes_read);
+-                if (ret < 0)
+-                {
+-                    printf("write to client failed\n");
+-                    break;
+-                }
+-            }
+-
+-            /* free the hostdata*/
+-            free(host_data);
+-        }
+-        else
+-        {
+-            printf("unknown event: %8.8X\n", ev.events);
+-        }
+-    }
+-ret:
+-    return 0;
+-}
+-
+-int main(int argc, char *argv[])
+-{
+-    ff_init(argc, argv);
+-
+-    kq = ff_kqueue();
+-    if (kq < 0)
+-    {
+-        printf("ff_kqueue failed, errno:%d, %s\n", errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    sockfd = ff_socket(AF_INET, SOCK_STREAM, 0);
+-    if (sockfd < 0)
+-    {
+-        printf("ff_socket failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+-        exit(1);
+-    }
+-    /* Set non blocking */
+-    int on = 1;
+-    ff_ioctl(sockfd, FIONBIO, &on);
+-
+-    struct sockaddr_in my_addr;
+-    bzero(&my_addr, sizeof(my_addr));
+-    my_addr.sin_family = AF_INET;
+-    my_addr.sin_port = htons(80);
+-    my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+-
+-    int ret = ff_bind(sockfd, (struct linux_sockaddr *)&my_addr, sizeof(my_addr));
+-    if (ret < 0)
+-    {
+-        printf("ff_bind failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    ret = ff_listen(sockfd, MAX_EVENTS);
+-    if (ret < 0)
+-    {
+-        printf("ff_listen failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    EV_SET(&kevSet, sockfd, EVFILT_READ, EV_ADD, 0, MAX_EVENTS, NULL);
+-    /* Update kqueue */
+-    ff_kevent(kq, &kevSet, 1, NULL, 0, NULL);
+-
+-    /* Create a e-poll file descriptor for host id  */
+-    epfd = epoll_create(MAX_EVENTS);
+-
+-    /* Create a host socket */
+-    ff_run(loop, NULL);
+-    return 0;
+-}
+\ No newline at end of file
+diff --git a/example/main_newRte.c b/example/main_newRte.c
+deleted file mode 100644
+index 97928ffd..00000000
+--- a/example/main_newRte.c
++++ /dev/null
+@@ -1,254 +0,0 @@
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <stdint.h>
+-#include <string.h>
+-#include <strings.h>
+-#include <sys/types.h>
+-#include <sys/socket.h>
+-#include <arpa/inet.h>
+-#include <errno.h>
+-#include <assert.h>
+-#include <sys/ioctl.h>
+-
+-#include "../lib/ff_config.h"
+-#include "../lib/ff_api.h"
+-#include "../lib/ff_veth.h"
+-
+-/* dpdk libraries for manipulating the rte_mbuf */
+-#include "../dpdk/lib/mbuf/rte_mbuf.h"
+-#include "../dpdk/lib/mbuf/rte_mbuf_core.h"
+-
+-#define MAX_EVENTS 512
+-/* kevent set */
+-struct kevent kevSet;
+-/* events */
+-struct kevent events[MAX_EVENTS];
+-/* kq */
+-int kq;
+-int sockfd;
+-#ifdef INET6
+-int sockfd6;
+-#endif
+-
+-char html[] =
+-"HTTP/1.1 200 OK\r\n"
+-"Server: F-Stack\r\n"
+-"Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+-"Content-Type: text/html\r\n"
+-"Content-Length: 438\r\n"
+-"Last-Modified: Tue, 21 Feb 2017 09:44:03 GMT\r\n"
+-"Connection: keep-alive\r\n"
+-"Accept-Ranges: bytes\r\n"
+-"\r\n"
+-"<!DOCTYPE html>\r\n"
+-"<html>\r\n"
+-"<head>\r\n"
+-"<title>Welcome to F-Stack!</title>\r\n"
+-"<style>\r\n"
+-"    body {  \r\n"
+-"        width: 35em;\r\n"
+-"        margin: 0 auto; \r\n"
+-"        font-family: Tahoma, Verdana, Arial, sans-serif;\r\n"
+-"    }\r\n"
+-"</style>\r\n"
+-"</head>\r\n"
+-"<body>\r\n"
+-"<h1>Welcome to F-Stack!</h1>\r\n"
+-"\r\n"
+-"<p>For online documentation and support please refer to\r\n"
+-"<a href=\"http://F-Stack.org/\">F-Stack.org</a>.<br/>\r\n"
+-"\r\n"
+-"<p><em>Thank you for using F-Stack.</em></p>\r\n"
+-"</body>\r\n"
+-"</html>";
+-
+-void *ptr;  
+-
+-/* display rte_mbuf data */
+-void display_rte_data(void *m){
+-    struct rte_mbuf *mbuf = (struct rte_mbuf *)m;
+-    unsigned char *dataaa = rte_pktmbuf_mtod(mbuf, unsigned char *);
+-    for(int i = 0; i < rte_pktmbuf_data_len(mbuf); i++) {
+-        printf("%02x ", dataaa[i]);
+-    }
+-    printf("\n");
+-}
+-
+-int loop(void *arg)
+-{
+-    /* Wait for events to happen */
+-    int nevents = ff_kevent(kq, NULL, 0, events, MAX_EVENTS, NULL);
+-    int i;
+-
+-    if (nevents < 0) {
+-        printf("ff_kevent failed:%d, %s\n", errno,
+-                        strerror(errno));
+-        return -1;
+-    }
+-
+-    for (i = 0; i < nevents; ++i) {
+-        struct kevent event = events[i];
+-        int clientfd = (int)event.ident;
+-
+-        /* Handle disconnect */
+-        if (event.flags & EV_EOF) {
+-            /* Simply close socket */
+-            ff_close(clientfd);
+-#ifdef INET6
+-        } else if (clientfd == sockfd || clientfd == sockfd6) {
+-#else
+-        } else if (clientfd == sockfd) {
+-#endif
+-            int available = (int)event.data;
+-            do {
+-                int nclientfd = ff_accept(clientfd, NULL, NULL);
+-                if (nclientfd < 0) {
+-                    printf("ff_accept failed:%d, %s\n", errno,
+-                        strerror(errno));
+-                    break;
+-                }
+-
+-                /* Add to event list */
+-                EV_SET(&kevSet, nclientfd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+-
+-                if(ff_kevent(kq, &kevSet, 1, NULL, 0, NULL) < 0) {
+-                    printf("ff_kevent error:%d, %s\n", errno,
+-                        strerror(errno));
+-                    return -1;
+-                }
+-
+-                available--;
+-            } while (available);
+-        } else if (event.filter == EVFILT_READ) {
+-            size_t nbytes=256;
+-
+-            /*Allocate double pointer to pass to the ff_read*/   
+-            void **ptr1 = &ptr;  
+-
+-            /* Pass the **ptr to ff_read */
+-            ssize_t readlen = ff_read(clientfd, ptr1, nbytes);
+-
+-            /* Get the pointer to data from the freebsd mbuf */
+-            char *data = (char *) ff_mbuf_mtod(ptr);
+-
+-            /* Free the freebsd mbuf */
+-            ff_mbuf_free(ptr);
+-            
+-            /*Allocate new rte_mbuf from mempool*/
+-            unsigned lcore_id = rte_lcore_id();
+-            unsigned socketid = rte_lcore_to_socket_id(lcore_id);
+-            char s[64];
+-            snprintf(s, sizeof(s), "mbuf_pool_%d", socketid);
+-            struct rte_mempool *mp = rte_mempool_lookup(s);
+-
+-            if (!mp) {
+-                printf("Cannot get memory pool.\n");
+-                return -1;
+-            }
+-
+-            struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
+-            if (!m) {
+-                printf("Cannot allocate mbuf.\n");
+-                return -1;
+-            }
+-
+-            /*Get data pointer of the rte_mbuf*/
+-            char *data11 = rte_pktmbuf_mtod_offset(m, char *, 0);
+-
+-            /*Replace the contents of data11 and update the pkt flags */
+-            memcpy(data11, html, strlen(html));
+-            m->data_len = strlen(html);
+-            m->pkt_len = strlen(html);
+-            
+-            /* Get a new freebsd mbuf with ext_arg set as the new_rte_mbf*/
+-            void *bsd_mbuf = ff_mbuf_get(NULL, (void *)m, (void*)data11, strlen(html));
+-
+-            /* Write the bsd_mbuf to the socket */
+-            ff_write(clientfd, bsd_mbuf, strlen(html));
+-            // ff_mbuf_free(bsd_mbuf);
+-        } else {
+-            printf("unknown event: %8.8X\n", event.flags);
+-        }
+-    }
+-
+-    return 0;
+-}
+-
+-int main(int argc, char * argv[])
+-{
+-    ff_init(argc, argv);
+-
+-    kq = ff_kqueue();
+-    if (kq < 0) {
+-        printf("ff_kqueue failed, errno:%d, %s\n", errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    sockfd = ff_socket(AF_INET, SOCK_STREAM, 0);
+-    if (sockfd < 0) {
+-        printf("ff_socket failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    /* Set non blocking */
+-    int on = 1;
+-    ff_ioctl(sockfd, FIONBIO, &on);
+-
+-    struct sockaddr_in my_addr;
+-    bzero(&my_addr, sizeof(my_addr));
+-    my_addr.sin_family = AF_INET;
+-    my_addr.sin_port = htons(80);
+-    my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+-
+-    int ret = ff_bind(sockfd, (struct linux_sockaddr *)&my_addr, sizeof(my_addr));
+-    if (ret < 0) {
+-        printf("ff_bind failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    ret = ff_listen(sockfd, MAX_EVENTS);
+-    if (ret < 0) {
+-        printf("ff_listen failed, sockfd:%d, errno:%d, %s\n", sockfd, errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    EV_SET(&kevSet, sockfd, EVFILT_READ, EV_ADD, 0, MAX_EVENTS, NULL);
+-    /* Update kqueue */
+-    ff_kevent(kq, &kevSet, 1, NULL, 0, NULL);
+-
+-#ifdef INET6
+-    sockfd6 = ff_socket(AF_INET6, SOCK_STREAM, 0);
+-    if (sockfd6 < 0) {
+-        printf("ff_socket failed, sockfd6:%d, errno:%d, %s\n", sockfd6, errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    struct sockaddr_in6 my_addr6;
+-    bzero(&my_addr6, sizeof(my_addr6));
+-    my_addr6.sin6_family = AF_INET6;
+-    my_addr6.sin6_port = htons(80);
+-    my_addr6.sin6_addr = in6addr_any;
+-
+-    ret = ff_bind(sockfd6, (struct linux_sockaddr *)&my_addr6, sizeof(my_addr6));
+-    if (ret < 0) {
+-        printf("ff_bind failed, sockfd6:%d, errno:%d, %s\n", sockfd6, errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    ret = ff_listen(sockfd6, MAX_EVENTS);
+-    if (ret < 0) {
+-        printf("ff_listen failed, sockfd6:%d, errno:%d, %s\n", sockfd6, errno, strerror(errno));
+-        exit(1);
+-    }
+-
+-    EV_SET(&kevSet, sockfd6, EVFILT_READ, EV_ADD, 0, MAX_EVENTS, NULL);
+-    ret = ff_kevent(kq, &kevSet, 1, NULL, 0, NULL);
+-    if (ret < 0) {
+-        printf("ff_kevent failed:%d, %s\n", errno, strerror(errno));
+-        exit(1);
+-    }
+-#endif
+-
+-    ff_run(loop, NULL);
+-    return 0;
+-}
+\ No newline at end of file
+diff --git a/example/main_zc.c b/example/main_zc.c
+index f8741349..1c7b413d 100644
+--- a/example/main_zc.c
++++ b/example/main_zc.c
+@@ -9,8 +9,8 @@
+ #include <errno.h>
+ #include <assert.h>
+ 
+-#include "../lib/ff_config.h"
+-#include "../lib/ff_api.h"
++#include "ff_config.h"
++#include "ff_api.h"
+ 
+ #define MAX_EVENTS 512
+ 
+diff --git a/example/server.py b/example/server.py
+deleted file mode 100644
+index a0c8d5bf..00000000
+--- a/example/server.py
++++ /dev/null
+@@ -1,21 +0,0 @@
+-from http.server import BaseHTTPRequestHandler, HTTPServer
+-
+-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+-    def do_GET(self):
+-        print("Received a GET request")
+-        message = b'Hello, from the Python HTTP server!'
+-        self.send_response(200)
+-        self.send_header('Content-Length', len(message))  # Add Content-Length header
+-        self.end_headers()
+-        self.wfile.write(message)
+-
+-    def log_message(self, format, *args):
+-        print("Received a request: ", format % args)
+-
+-def run(server_class=HTTPServer, handler_class=SimpleHTTPRequestHandler, server_address=('10.10.1.2', 80)):
+-    httpd = server_class(server_address, handler_class)
+-    print(f"Starting HTTP server on {server_address[0]}:{server_address[1]}")
+-    httpd.serve_forever()
+-
+-if __name__ == "__main__":
+-    run()
+diff --git a/example/simplekapyserver.py b/example/simplekapyserver.py
+deleted file mode 100644
+index 7cd90bc8..00000000
+--- a/example/simplekapyserver.py
++++ /dev/null
+@@ -1,23 +0,0 @@
+-import http.server
+-import socketserver
+-
+-class MyHttpRequestHandler(http.server.SimpleHTTPRequestHandler):
+-    def do_GET(self):
+-        self.send_response(200)
+-        self.send_header("Content-type", "text/html")
+-        self.send_header("Connection", "keep-alive")
+-        self.end_headers()
+-        self.wfile.write(bytes("<html><head><title>Title goes here.</title></head>", "utf-8"))
+-        self.wfile.write(bytes("<body><p>This is a test.</p>", "utf-8"))
+-        self.wfile.write(bytes("<p>You accessed path: %s</p>" % self.path, "utf-8"))
+-        self.wfile.write(bytes("</body></html>", "utf-8"))
+-        self.wfile.flush()  # flush the buffer
+-
+-handler_object = MyHttpRequestHandler
+-
+-PORT = 8000
+-my_server = socketserver.TCPServer(("192.168.1.1", PORT), handler_object)
+-
+-# Star the server
+-print("serving at port", PORT)
+-my_server.serve_forever()
+\ No newline at end of file
+diff --git a/freebsd/kern/sys_generic.c b/freebsd/kern/sys_generic.c
+index 247177e4..44fd7285 100644
+--- a/freebsd/kern/sys_generic.c
++++ b/freebsd/kern/sys_generic.c
+@@ -336,13 +336,7 @@ kern_preadv(struct thread *td, int fd, struct uio *auio, off_t offset)
+ 	fdrop(fp, td);
+ 	return (error);
+ }
+-#ifndef _SYS_SYSPROTO_H_
+-struct write_args {
+-	int	fd;
+-	const void *buf;
+-	size_t	nbyte;
+-};
+-#endif
++
+ /*
+  * Common code for readv and preadv that reads data in
+  * from a file using the passed in uio, offset, and flags.
+diff --git a/freebsd/kern/sys_socket.c b/freebsd/kern/sys_socket.c
+index 66aec95d..efb83b4f 100644
+--- a/freebsd/kern/sys_socket.c
++++ b/freebsd/kern/sys_socket.c
+@@ -127,21 +127,13 @@ soo_read(struct file *fp, struct uio *uio, struct ucred *active_cred,
+ {
+ 	struct socket *so = fp->f_data;
+ 	int error;
+-	// printf("The address pointed to by uio at syssock is %p\n", uio->uio_iov->iov_base);
+-	// printf("The address pointed to by uio at syssock is %p\n", &uio->uio_iov->iov_base);
+-	
+-	//Cast the pointer to mbuf 
+-	struct mbuf **mb = (struct mbuf **) (uio->uio_iov->iov_base);
+-	
+-	
++
+ #ifdef MAC
+ 	error = mac_socket_check_receive(active_cred, so);
+ 	if (error)
+ 		return (error);
+ #endif
+-
+-	error = soreceive(so, 0, uio, mb, 0, 0);
+-
++	error = soreceive(so, 0, uio, 0, 0, 0);
+ 	return (error);
+ }
+ 
+@@ -152,14 +144,12 @@ soo_write(struct file *fp, struct uio *uio, struct ucred *active_cred,
+ 	struct socket *so = fp->f_data;
+ 	int error;
+ 
+-	/* get the mbuf from the uio */
+-	struct mbuf *mb = (struct mbuf *) (uio->uio_iov->iov_base);
+ #ifdef MAC
+ 	error = mac_socket_check_send(active_cred, so);
+ 	if (error)
+ 		return (error);
+ #endif
+-	error = sosend(so, 0, 0, mb, 0, 0, uio->uio_td);
++	error = sosend(so, 0, uio, 0, 0, 0, uio->uio_td);
+ 	if (error == EPIPE && (so->so_options & SO_NOSIGPIPE) == 0) {
+ 		PROC_LOCK(uio->uio_td->td_proc);
+ 		tdsignal(uio->uio_td, SIGPIPE);
+diff --git a/freebsd/kern/uipc_mbuf.c b/freebsd/kern/uipc_mbuf.c
+index 856948ea..67955913 100644
+--- a/freebsd/kern/uipc_mbuf.c
++++ b/freebsd/kern/uipc_mbuf.c
+@@ -225,12 +225,10 @@ mb_dupcl(struct mbuf *n, struct mbuf *m)
+ 		    __rangeof(struct mbuf, m_epg_startcopy, m_epg_endcopy));
+ 		bcopy(&m->m_ext, &n->m_ext, m_epg_ext_copylen);
+ 	} else if (m->m_ext.ext_type == EXT_EXTREF)
+-		bcopy(&m->m_ext, &n->m_ext, sizeof(struct m_ext));	
+-	else{
++		bcopy(&m->m_ext, &n->m_ext, sizeof(struct m_ext));
++	else
+ 		bcopy(&m->m_ext, &n->m_ext, m_ext_copylen);
+-		n->m_ext.ext_free = m->m_ext.ext_free;  // copy ext_free
+-        n->m_ext.ext_arg1 = m->m_ext.ext_arg1;  // copy ext_arg1	
+-	}
++
+ 	n->m_flags |= m->m_flags & (M_RDONLY | M_EXT | M_EXTPG);
+ 
+ 	/* See if this is the mbuf that holds the embedded refcount. */
+@@ -656,13 +654,10 @@ m_copydata(const struct mbuf *m, int off, int len, caddr_t cp)
+ 	while (len > 0) {
+ 		KASSERT(m != NULL, ("m_copydata, length > size of mbuf chain"));
+ 		count = min(m->m_len - off, len);
+-		if ((m->m_flags & M_EXTPG) != 0){
+-			printf("m_copydata: M_EXTPG set\n");
++		if ((m->m_flags & M_EXTPG) != 0)
+ 			m_copyfromunmapped(m, off, count, cp);
+-		}	
+-		else{
++		else
+ 			bcopy(mtod(m, caddr_t) + off, cp, count);
+-		}	
+ 		len -= count;
+ 		cp += count;
+ 		off = 0;
+diff --git a/freebsd/kern/uipc_socket.c b/freebsd/kern/uipc_socket.c
+index 83fdab85..bff9c652 100644
+--- a/freebsd/kern/uipc_socket.c
++++ b/freebsd/kern/uipc_socket.c
+@@ -1339,7 +1339,7 @@ soconnectat(int fd, struct socket *so, struct sockaddr *nam, struct thread *td)
+ 			    nam, td);
+ 		} else {
+ 			error = (*so->so_proto->pr_usrreqs->pru_connectat)(fd,
+-			    so, nam, td);	
++			    so, nam, td);
+ 		}
+ 	}
+ 	CURVNET_RESTORE();
+@@ -1753,7 +1753,7 @@ restart:
+ #ifdef KERN_TLS
+ 			pru_flag |= tls_pruflag;
+ #endif
+-			/* tcp user request using the top mbuf attached previously*/
++
+ 			error = (*so->so_proto->pr_usrreqs->pru_send)(so,
+ 			    pru_flag, top, addr, control, td);
+ 
+@@ -1915,8 +1915,8 @@ soreceive_generic(struct socket *so, struct sockaddr **psa, struct uio *uio,
+ 	struct mbuf *nextrecord;
+ 	int moff, type = 0;
+ 	ssize_t orig_resid = uio->uio_resid;
+-	mp = mp0;
+ 
++	mp = mp0;
+ 	if (psa != NULL)
+ 		*psa = NULL;
+ 	if (controlp != NULL)
+diff --git a/freebsd/netinet/ip_output.c b/freebsd/netinet/ip_output.c
+index dd54ab24..2d45d583 100644
+--- a/freebsd/netinet/ip_output.c
++++ b/freebsd/netinet/ip_output.c
+@@ -271,7 +271,7 @@ ip_output_send(struct inpcb *inp, struct ifnet *ifp, struct mbuf *m,
+ 		m->m_pkthdr.snd_tag = m_snd_tag_ref(mst);
+ 		m->m_pkthdr.csum_flags |= CSUM_SND_TAG;
+ 	}
+-	
++
+ 	error = (*ifp->if_output)(ifp, m, (const struct sockaddr *)gw, ro);
+ 
+ done:
+diff --git a/freebsd/netinet/tcp_output.c b/freebsd/netinet/tcp_output.c
+index 359670c9..d4b5a328 100644
+--- a/freebsd/netinet/tcp_output.c
++++ b/freebsd/netinet/tcp_output.c
+@@ -1064,23 +1064,20 @@ send:
+ 		 * to the offset in the socket buffer chain.
+ 		 */
+ 		mb = sbsndptr_noadv(&so->so_snd, off, &moff);
+-		void *tempptr = mb->m_ext.ext_arg1;
+-		if (len <= MHLEN - hdrlen - max_linkhdr && !hw_tls && tempptr == NULL) {
++		if (len <= MHLEN - hdrlen - max_linkhdr && !hw_tls) {
+ 			m_copydata(mb, moff, len,
+ 			    mtod(m, caddr_t) + hdrlen);
+-			if (SEQ_LT(tp->snd_nxt, tp->snd_max)){
++			if (SEQ_LT(tp->snd_nxt, tp->snd_max))
+ 				sbsndptr_adv(&so->so_snd, mb, len);
+-			}	
+ 			m->m_len += len;
+ 		} else {
+ 			if (SEQ_LT(tp->snd_nxt, tp->snd_max))
+ 				msb = NULL;
+ 			else
+ 				msb = &so->so_snd;
+-			/* Duplicate mbuf with tcp headers attaching to the mbuf chain*/
+ 			m->m_next = tcp_m_copym(mb, moff,
+ 			    &len, if_hw_tsomaxsegcount,
+-			    if_hw_tsomaxsegsize, msb, hw_tls);		
++			    if_hw_tsomaxsegsize, msb, hw_tls);
+ 			if (len <= (tp->t_maxseg - optlen)) {
+ 				/*
+ 				 * Must have ran out of mbufs for the copy
+@@ -1133,7 +1130,7 @@ send:
+ 		} else
+ #endif
+ 		m->m_data += max_linkhdr;
+-		m->m_len = hdrlen; 
++		m->m_len = hdrlen;
+ 	}
+ 	SOCKBUF_UNLOCK_ASSERT(&so->so_snd);
+ 	m->m_pkthdr.rcvif = (struct ifnet *)0;
+@@ -1491,10 +1488,11 @@ send:
+ 	/* Save packet, if requested. */
+ 	tcp_pcap_add(th, m, &(tp->t_outpkts));
+ #endif
+-	/*pass th mbuf chain to ip layer */
++
+ 	error = ip_output(m, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
+ 	    ((so->so_options & SO_DONTROUTE) ? IP_ROUTETOIF : 0), 0,
+ 	    tp->t_inpcb);
++
+ 	if (error == EMSGSIZE && tp->t_inpcb->inp_route.ro_nh != NULL)
+ 		mtu = tp->t_inpcb->inp_route.ro_nh->nh_mtu;
+     }
+diff --git a/freebsd/netinet/tcp_usrreq.c b/freebsd/netinet/tcp_usrreq.c
+index d876d23f..ae34a368 100644
+--- a/freebsd/netinet/tcp_usrreq.c
++++ b/freebsd/netinet/tcp_usrreq.c
+@@ -1004,7 +1004,6 @@ static int
+ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
+     struct sockaddr *nam, struct mbuf *control, struct thread *td)
+ {
+-
+ 	struct epoch_tracker et;
+ 	int error = 0;
+ 	struct inpcb *inp = NULL;
+@@ -1199,7 +1198,6 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
+ 		m_freem(control);	/* empty control, just free it */
+ 	}
+ 	if (!(flags & PRUS_OOB)) {
+-		/* Append the mbuf to socket*/
+ 		sbappendstream(&so->so_snd, m, flags);
+ 		if (nam && tp->t_state < TCPS_SYN_SENT) {
+ 			/*
+@@ -1257,7 +1255,6 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
+ 		    !(flags & PRUS_NOTREADY)) {
+ 			if (flags & PRUS_MORETOCOME)
+ 				tp->t_flags |= TF_MORETOCOME;
+-			/* Call tcp output with tcp control block */	
+ 			error = tp->t_fb->tfb_tcp_output(tp);
+ 			if (flags & PRUS_MORETOCOME)
+ 				tp->t_flags &= ~TF_MORETOCOME;
+diff --git a/freebsd/sys/file.h b/freebsd/sys/file.h
+index e393da47..c42ab09a 100644
+--- a/freebsd/sys/file.h
++++ b/freebsd/sys/file.h
+@@ -79,6 +79,7 @@ struct filecaps;
+ struct kaiocb;
+ struct kinfo_file;
+ struct ucred;
++
+ #define	FOF_OFFSET	0x01	/* Use the offset in uio argument */
+ #define	FOF_NOLOCK	0x02	/* Do not take FOFFSET_LOCK */
+ #define	FOF_NEXTOFF_R	0x04	/* Also update f_nextoff[UIO_READ] */
+@@ -98,7 +99,7 @@ foffset_get(struct file *fp)
+ 
+ typedef int fo_rdwr_t(struct file *fp, struct uio *uio,
+ 		    struct ucred *active_cred, int flags,
+-		    struct thread *td);					
++		    struct thread *td);
+ typedef	int fo_truncate_t(struct file *fp, off_t length,
+ 		    struct ucred *active_cred, struct thread *td);
+ typedef	int fo_ioctl_t(struct file *fp, u_long com, void *data,
+diff --git a/freebsd/sys/mbuf.h b/freebsd/sys/mbuf.h
+index 0fc80d70..e7d958da 100644
+--- a/freebsd/sys/mbuf.h
++++ b/freebsd/sys/mbuf.h
+@@ -277,7 +277,6 @@ struct m_ext {
+ 			 */
+ 			char 	*ext_buf;	/* start of buffer */
+ #define	m_ext_copylen	offsetof(struct m_ext, ext_arg2)
+-#define m_ext_copylen_including_free offsetof(struct m_ext, ext_arg1) + sizeof(m_ext_free_t *)
+ 			void	*ext_arg2;
+ 		};
+ 		struct {
+@@ -304,7 +303,6 @@ struct m_ext {
+ 	 */
+ 	m_ext_free_t	*ext_free;
+ 	void		*ext_arg1;
+-#define m_epg_free (offsetof(struct m_ext, ext_arg1) + sizeof(void *))
+ };
+ 
+ /*
+diff --git a/freebsd/sys/protosw.h b/freebsd/sys/protosw.h
+index 7199dc55..9c3139c8 100644
+--- a/freebsd/sys/protosw.h
++++ b/freebsd/sys/protosw.h
+@@ -221,7 +221,7 @@ struct pr_usrreqs {
+ 		    int flags, struct thread *td);
+ 	int	(*pru_soreceive)(struct socket *so, struct sockaddr **paddr,
+ 		    struct uio *uio, struct mbuf **mp0, struct mbuf **controlp,
+-		    int *flagsp);		
++		    int *flagsp);
+ 	int	(*pru_sopoll)(struct socket *so, int events,
+ 		    struct ucred *cred, struct thread *td);
+ 	void	(*pru_sosetlabel)(struct socket *so);
+diff --git a/freebsd/sys/socketvar.h b/freebsd/sys/socketvar.h
+index 2c3230e1..29ff0d07 100644
+--- a/freebsd/sys/socketvar.h
++++ b/freebsd/sys/socketvar.h
+@@ -454,7 +454,7 @@ int	soreceive_dgram(struct socket *so, struct sockaddr **paddr,
+ 	    int *flagsp);
+ int	soreceive_generic(struct socket *so, struct sockaddr **paddr,
+ 	    struct uio *uio, struct mbuf **mp0, struct mbuf **controlp,
+-	    int *flagsp);		
++	    int *flagsp);
+ int	soreserve(struct socket *so, u_long sndcc, u_long rcvcc);
+ void	sorflush(struct socket *so);
+ int	sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
+diff --git a/lib/Makefile b/lib/Makefile
+index e63a3459..84312329 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -42,8 +42,8 @@ endif
+ #FF_NETGRAPH=1
+ #FF_IPFW=1
+ 
+-# FF_USE_PAGE_ARRAY=1
+-# FF_ZC_SEND=1
++#FF_USE_PAGE_ARRAY=1
++#FF_ZC_SEND=1
+ FF_INET6=1
+ 
+ # TCPHPTS drivers rack and bbr
+diff --git a/lib/ff_api.h b/lib/ff_api.h
+index 227beab1..3cb57de8 100644
+--- a/lib/ff_api.h
++++ b/lib/ff_api.h
+@@ -35,10 +35,10 @@ extern "C" {
+ #include <sys/poll.h>
+ #include <netinet/in.h>
+ #include <sys/time.h>
++
+ #include "ff_event.h"
+ #include "ff_errno.h"
+ 
+-
+ struct linux_sockaddr {
+     short sa_family;
+     char sa_data[14];
+@@ -93,9 +93,10 @@ int ff_getpeername(int s, struct linux_sockaddr *name,
+ int ff_getsockname(int s, struct linux_sockaddr *name,
+     socklen_t *namelen);
+ 
+-ssize_t ff_read(int d, void **buf, size_t nbytes);
++ssize_t ff_read(int d, void *buf, size_t nbytes);
+ ssize_t ff_readv(int fd, const struct iovec *iov, int iovcnt);
+ 
++
+ /*
+  * Write data to the socket sendspace buf.
+  *
+@@ -110,7 +111,7 @@ ssize_t ff_readv(int fd, const struct iovec *iov, int iovcnt);
+  * But it should be noted that not all parameters can take effect, such as 32768 and 32768.
+  * `ff_sysctl` can see there values while APP is running.
+  */
+-ssize_t ff_write(int fd, void *buf, size_t nbytes);
++ssize_t ff_write(int fd, const void *buf, size_t nbytes);
+ ssize_t ff_writev(int fd, const struct iovec *iov, int iovcnt);
+ 
+ ssize_t ff_send(int s, const void *buf, size_t len, int flags);
+diff --git a/lib/ff_api.symlist b/lib/ff_api.symlist
+index 83cb14e4..0cfa1b1b 100755
+--- a/lib/ff_api.symlist
++++ b/lib/ff_api.symlist
+@@ -52,7 +52,6 @@ ff_dup
+ ff_dup2
+ ff_next_mbuf
+ ff_mbuf_mtod
+-ff_mbuf_detach_rte
+ ff_rte_frm_extcl
+ ff_mbuf_set_vlan_info
+ ff_zc_mbuf_get
+diff --git a/lib/ff_dpdk_if.c b/lib/ff_dpdk_if.c
+index bce5af2d..72317f1b 100644
+--- a/lib/ff_dpdk_if.c
++++ b/lib/ff_dpdk_if.c
+@@ -1778,6 +1778,7 @@ send_burst(struct lcore_conf *qconf, uint16_t n, uint8_t port)
+                ff_global_cfg.pcap.snap_len, ff_global_cfg.pcap.save_len);
+         }
+     }
++
+     ret = rte_eth_tx_burst(port, queueid, m_table, n);
+     ff_traffic.tx_packets += ret;
+     uint16_t i;
+@@ -1803,7 +1804,7 @@ send_burst(struct lcore_conf *qconf, uint16_t n, uint8_t port)
+ /* Enqueue a single packet, and send burst if queue is filled */
+ static inline int
+ send_single_packet(struct rte_mbuf *m, uint8_t port)
+-{   
++{
+     uint16_t len;
+     struct lcore_conf *qconf;
+ 
+@@ -1829,6 +1830,7 @@ ff_dpdk_if_send(struct ff_dpdk_if_context *ctx, void *m,
+ #ifdef FF_USE_PAGE_ARRAY
+     struct lcore_conf *qconf = &lcore_conf;
+     int    len = 0;
++
+     len = ff_if_send_onepkt(ctx, m,total);
+     if (unlikely(len == MAX_PKT_BURST)) {
+         send_burst(qconf, MAX_PKT_BURST, ctx->port_id);
+@@ -1838,86 +1840,47 @@ ff_dpdk_if_send(struct ff_dpdk_if_context *ctx, void *m,
+     return 0;
+ #endif
+     struct rte_mempool *mbuf_pool = pktmbuf_pool[lcore_conf.socket_id];
+-    struct rte_mbuf *head = NULL;
+-    void *p_bsdbuf = m;
+-    void *dt = NULL;
+-    unsigned  ln = 0;
+-    struct rte_mbuf *rte_mbuf_frm_bsd = NULL;
+-    void *prepend_data = NULL;
+-    char *rte_prepend_data = NULL;
+-    uint16_t prepend_len = 0 ; 
+-    uint16_t headroomavail = 0;
+-
+-    
+-
+-    /* Get the next mbuf in the chain which contains the http data */
+-    int ret = ff_next_mbuf(&p_bsdbuf, &dt, &ln);
+-    if (ret == 0 && p_bsdbuf != NULL){
+-        prepend_len = ln; 
+-        rte_mbuf_frm_bsd = ff_rte_frm_extcl(p_bsdbuf);
+-    }
+-    if (rte_mbuf_frm_bsd != NULL){
+-       headroomavail = rte_pktmbuf_headroom(rte_mbuf_frm_bsd);
+-    }
+-    
+-    /*If all conditions meet it is a resused rte_mbuf */
+-    if ((p_bsdbuf != NULL) && (rte_mbuf_frm_bsd != NULL) && (headroomavail >= prepend_len) && (rte_mbuf_frm_bsd->pkt_len !=0) && (rte_mbuf_frm_bsd->data_len !=0)){
+-        head = rte_mbuf_frm_bsd; 
+-        prepend_data = ff_mbuf_mtod(m);       
+-        rte_prepend_data = rte_pktmbuf_prepend(rte_mbuf_frm_bsd, prepend_len);
+-        if (rte_prepend_data == NULL){
+-            printf("rte_pktmbuf_prepend failed\n");
+-        }
+-        bcopy(prepend_data, rte_prepend_data, prepend_len);
+-        /* Increase the ref-count of the rte_mbuf*/
+-        rte_mbuf_refcnt_set(head, 2);
+-
+-    /* normal packet processing for packets other than data packets */
+-    }else {
+-        head = rte_pktmbuf_alloc(mbuf_pool);
+-        if (head == NULL) {
+-            ff_mbuf_free(m);
+-            return -1;
+-        }
+-
+-        head->pkt_len = total;
+-        head->nb_segs = 0;
++    struct rte_mbuf *head = rte_pktmbuf_alloc(mbuf_pool);
++    if (head == NULL) {
++        ff_mbuf_free(m);
++        return -1;
++    }
+ 
+-        int off = 0;
+-        struct rte_mbuf *cur = head, *prev = NULL;
++    head->pkt_len = total;
++    head->nb_segs = 0;
+ 
+-        while(total > 0) {
++    int off = 0;
++    struct rte_mbuf *cur = head, *prev = NULL;
++    while(total > 0) {
++        if (cur == NULL) {
++            cur = rte_pktmbuf_alloc(mbuf_pool);
+             if (cur == NULL) {
+-                cur = rte_pktmbuf_alloc(mbuf_pool);
+-                if (cur == NULL) {
+-                    rte_pktmbuf_free(head);
+-                    ff_mbuf_free(m);
+-                    return -1;
+-                }
+-            }
+-
+-            if (prev != NULL) {
+-                prev->next = cur;
+-            }
+-            head->nb_segs++;
+-
+-            prev = cur;
+-            void *data = rte_pktmbuf_mtod(cur, void*);
+-            // printf("in ff_dpdk_send data = %p\n", data);
+-            int len = total > RTE_MBUF_DEFAULT_DATAROOM ? RTE_MBUF_DEFAULT_DATAROOM : total;
+-            int ret = ff_mbuf_copydata(m, data, off, len);
+-            if (ret < 0) {
+                 rte_pktmbuf_free(head);
+                 ff_mbuf_free(m);
+                 return -1;
+             }
+-        
++        }
+ 
+-            cur->data_len = len;
+-            off += len;
+-            total -= len;
+-            cur = NULL;
++        if (prev != NULL) {
++            prev->next = cur;
+         }
++        head->nb_segs++;
++
++        prev = cur;
++        void *data = rte_pktmbuf_mtod(cur, void*);
++        int len = total > RTE_MBUF_DEFAULT_DATAROOM ? RTE_MBUF_DEFAULT_DATAROOM : total;
++        int ret = ff_mbuf_copydata(m, data, off, len);
++        if (ret < 0) {
++            rte_pktmbuf_free(head);
++            ff_mbuf_free(m);
++            return -1;
++        }
++
++
++        cur->data_len = len;
++        off += len;
++        total -= len;
++        cur = NULL;
+     }
+ 
+     struct ff_tx_offload offload = {0};
+@@ -1982,6 +1945,7 @@ ff_dpdk_if_send(struct ff_dpdk_if_context *ctx, void *m,
+             head->l3_len = iph_len;
+         }
+     }
++
+     ff_mbuf_free(m);
+ 
+     return send_single_packet(head, ctx->port_id);
+diff --git a/lib/ff_memory.c b/lib/ff_memory.c
+index 50d35196..63e6686a 100644
+--- a/lib/ff_memory.c
++++ b/lib/ff_memory.c
+@@ -312,6 +312,7 @@ static inline void ff_offload_set(struct ff_dpdk_if_context *ctx, void *m, struc
+ {
+     void                    *data = NULL;
+     struct ff_tx_offload     offload = {0};
++    
+     ff_mbuf_tx_offload(m, &offload);
+     data = rte_pktmbuf_mtod(head, void*);
+ 
+@@ -424,6 +425,7 @@ static inline struct rte_mbuf*     ff_bsd_to_rte(void *m, int total)
+         cur->buf_iova = ff_mem_virt2phy((const void*)(cur->buf_addr));
+         cur->data_off = 0;
+         cur->data_len = len;        
++
+         p_head->nb_segs++;
+         if (prev != NULL) {
+             prev->next = cur;
+@@ -442,6 +444,7 @@ int ff_if_send_onepkt(struct ff_dpdk_if_context *ctx, void *m, int total)
+     void            *p_data = NULL;
+     struct lcore_conf *qconf = NULL;
+     unsigned        len = 0;
++
+     if ( !m ){
+         rte_log(RTE_LOG_CRIT, RTE_LOGTYPE_USER1, "ff_dpdk_if_send_ex input invalid NULL address.");
+         return 0;
+diff --git a/lib/ff_syscall_wrapper.c b/lib/ff_syscall_wrapper.c
+index 94819659..80fbda53 100644
+--- a/lib/ff_syscall_wrapper.c
++++ b/lib/ff_syscall_wrapper.c
+@@ -52,7 +52,7 @@
+ #include <sys/fcntl.h>
+ #include <net/route.h>
+ #include <net/route/route_ctl.h>
+-#include <sys/mbuf.h>
++
+ #include <net/if.h>
+ #include <sys/sockio.h>
+ 
+@@ -689,16 +689,19 @@ kern_fail:
+     ff_os_errno(rc);
+     return (-1);
+ }
++
+ ssize_t
+-ff_read(int fd, void **buf, size_t nbytes)
++ff_read(int fd, void *buf, size_t nbytes)
+ {
+     struct uio auio;
+     struct iovec aiov;
+     int rc;
++
+     if (nbytes > INT_MAX) {
+         rc = EINVAL;
+         goto kern_fail;
+     }
++
+     aiov.iov_base = buf;
+     aiov.iov_len = nbytes;
+     auio.uio_iov = &aiov;
+@@ -714,6 +717,7 @@ kern_fail:
+     ff_os_errno(rc);
+     return (-1);
+ }
++
+ ssize_t
+ ff_readv(int fd, const struct iovec *iov, int iovcnt)
+ {
+@@ -739,18 +743,18 @@ kern_fail:
+ }
+ 
+ ssize_t
+-ff_write(int fd, void *buf, size_t nbytes)
++ff_write(int fd, const void *buf, size_t nbytes)
+ {
+     struct uio auio;
+     struct iovec aiov;
+     int rc;
+-    struct mbuf *m = (struct mbuf *) buf;
++
+     if (nbytes > INT_MAX) {
+         rc = EINVAL;
+         goto kern_fail;
+     }
+-    /*aiov base points mbuf for future extraction*/
+-    aiov.iov_base = (void *) m;
++
++    aiov.iov_base = (void *)(uintptr_t)buf;
+     aiov.iov_len = nbytes;
+     auio.uio_iov = &aiov;
+     auio.uio_iovcnt = 1;
+@@ -1026,9 +1030,9 @@ ff_connect(int s, const struct linux_sockaddr *name, socklen_t namelen)
+     struct sockaddr_storage bsdaddr;
+     linux2freebsd_sockaddr(name, namelen, (struct sockaddr *)&bsdaddr);
+ 
+-    if ((rc = kern_connectat(curthread, AT_FDCWD, s, (struct sockaddr *)&bsdaddr))){
++    if ((rc = kern_connectat(curthread, AT_FDCWD, s, (struct sockaddr *)&bsdaddr)))
+         goto kern_fail;
+-    }
++
+     return (rc);
+ kern_fail:
+     ff_os_errno(rc);
+diff --git a/lib/ff_veth.c b/lib/ff_veth.c
+index 3e3839ab..16529148 100644
+--- a/lib/ff_veth.c
++++ b/lib/ff_veth.c
+@@ -55,7 +55,6 @@
+ #include <netinet/in_var.h>
+ #include <netinet6/nd6.h>
+ 
+-
+ #include <machine/atomic.h>
+ 
+ #include "ff_veth.h"
+@@ -195,9 +194,11 @@ ff_mbuf_copydata(void *m, void *data, int off, int len)
+ {
+     int ret;
+     struct mbuf *mb = (struct mbuf *)m;
++
+     if (off + len > mb->m_pkthdr.len) {
+         return -1;
+     }
++
+     m_copydata(mb, off, len, data);
+ 
+     return 0;
+@@ -234,27 +235,6 @@ ff_mbuf_free(void *m)
+     m_freem((struct mbuf *)m);
+ }
+ 
+-void 
+-ff_mbuf_detach_rte(void* bsd_mbuf)
+-{
+-    if ( !bsd_mbuf )
+-        return;
+- 
+-    struct mbuf *mb = (struct mbuf *)bsd_mbuf;
+-    if (mb->m_flags & M_EXT) {
+-        mb->m_flags &= ~M_EXT;
+-        mb->m_ext.ext_buf = NULL;
+-        mb->m_data = mb->m_ext.ext_buf;
+-        mb->m_ext.ext_size = 0;
+-        mb->m_ext.ext_free = NULL;
+-        mb->m_ext.ext_arg1 = NULL;
+-        mb->m_ext.ext_arg2 = NULL;
+-        mb->m_ext.ext_type = 0;
+-        mb->m_ext.ext_count = 0;
+-        mb->m_ext.ext_flags = 0;
+-    }
+-}
+-
+ static void
+ ff_mbuf_ext_free(struct mbuf *m)
+ {
+@@ -385,7 +365,6 @@ ff_veth_process_packet(void *arg, void *m)
+ static int
+ ff_veth_transmit(struct ifnet *ifp, struct mbuf *m)
+ {
+-
+     struct ff_veth_softc *sc = (struct ff_veth_softc *)ifp->if_softc;
+     return ff_dpdk_if_send(sc->host_ctx, (void*)m, m->m_pkthdr.len);
+ }
+@@ -770,7 +749,7 @@ int ff_next_mbuf(void **mbuf_bsd, void **data, unsigned *len)
+ void * ff_mbuf_mtod(void* bsd_mbuf)
+ {
+     if ( !bsd_mbuf )
+-        return NULL;  
++        return NULL;
+     return (void*)((struct mbuf *)bsd_mbuf)->m_data;
+ }
+ 
+@@ -780,13 +759,13 @@ void* ff_rte_frm_extcl(void* mbuf)
+     struct mbuf *bsd_mbuf = mbuf;
+ 
+     if ( (bsd_mbuf->m_flags & M_EXT) &&
+-        bsd_mbuf->m_ext.ext_type == EXT_DISPOSABLE && bsd_mbuf->m_ext.ext_free == ff_mbuf_ext_free ){  
++        bsd_mbuf->m_ext.ext_type == EXT_DISPOSABLE && bsd_mbuf->m_ext.ext_free == ff_mbuf_ext_free ) {
+         return bsd_mbuf->m_ext.ext_arg1;
+     }
+-    else{
++    else
+         return NULL;
+-    }
+ }
++
+ void
+ ff_mbuf_set_vlan_info(void *hdr, uint16_t vlan_tci) {
+     struct mbuf *m = (struct mbuf *)hdr;
+diff --git a/lib/ff_veth.h b/lib/ff_veth.h
+index 2a4b3758..627662f6 100644
+--- a/lib/ff_veth.h
++++ b/lib/ff_veth.h
+@@ -39,7 +39,6 @@ void ff_mbuf_free(void *m);
+ int ff_mbuf_copydata(void *m, void *data, int off, int len);
+ int ff_next_mbuf(void **mbuf_bsd, void **data, unsigned *len);
+ void* ff_mbuf_mtod(void* bsd_mbuf);
+-void ff_mbuf_detach_rte(void* bsd_mbuf);
+ void* ff_rte_frm_extcl(void* mbuf);
+ 
+ struct ff_tx_offload;
+diff --git a/start.sh b/start.sh
+index 1dc5de2b..59176a4c 100755
+--- a/start.sh
++++ b/start.sh
+@@ -11,7 +11,7 @@ function usage() {
+ }
+ 
+ conf=config.ini
+-bin=./example/hello_host
++bin=./example/helloworld
+ 
+ while getopts "c:b:o:h" args
+ do
+@@ -58,7 +58,7 @@ do
+     then
+         echo "${bin} --conf ${conf} --proc-type=primary --proc-id=${proc_id} ${others}"
+         ${bin} --conf ${conf} --proc-type=primary --proc-id=${proc_id} ${others} &
+-        sleep 20
++        sleep 5
+     else
+         echo "${bin} --conf ${conf} --proc-type=secondary --proc-id=${proc_id} ${others}"
+         ${bin} --conf ${conf} --proc-type=secondary --proc-id=${proc_id} ${others} &
+diff --git a/tools/compat/include/sys/socketvar.h b/tools/compat/include/sys/socketvar.h
+index 097719bc..29ff0d07 100644
+--- a/tools/compat/include/sys/socketvar.h
++++ b/tools/compat/include/sys/socketvar.h
+@@ -454,7 +454,7 @@ int	soreceive_dgram(struct socket *so, struct sockaddr **paddr,
+ 	    int *flagsp);
+ int	soreceive_generic(struct socket *so, struct sockaddr **paddr,
+ 	    struct uio *uio, struct mbuf **mp0, struct mbuf **controlp,
+-	    int *flagsp);	
++	    int *flagsp);
+ int	soreserve(struct socket *so, u_long sndcc, u_long rcvcc);
+ void	sorflush(struct socket *so);
+ int	sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
