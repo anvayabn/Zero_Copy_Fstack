@@ -206,9 +206,8 @@ char html5[] =
 char *hostip = "192.168.1.1";
 uint16_t hostport = 8000;
 size_t len_from_hostdata = 158;
-int epfd;
-struct epoll_event host_events[MAX_EVENTS];
-struct epoll_event host_event;
+
+char *host_data[256];
 
 int loop_num = 0;
 struct fd_pair
@@ -270,25 +269,6 @@ int get_clientfd(struct fd_pair *map, int hostfd)
     }
     return -1;
 }
-/* Set the socket descriptor to non-blocking */
-int set_to_nonblocking(int hostfd)
-{
-    int flags = fcntl(hostfd, F_GETFL, 0);
-    if (flags == -1)
-    {
-        printf("fcntl failed\n");
-        return -1;
-    }
-    flags |= O_NONBLOCK;
-    int s = fcntl(hostfd, F_SETFL, flags);
-    if (s == -1)
-    {
-        printf("fcntl failed\n");
-        return -1;
-    }
-    return 0;
-}
-
 /* Connect to host */
 int connect_to_host(char *ip, uint16_t port)
 {
@@ -299,20 +279,8 @@ int connect_to_host(char *ip, uint16_t port)
         printf("socket failed, hostfd:%d, errno:%d, %s\n", hostfd_local, errno, strerror(errno));
         exit(1);
     }
-    int ret = set_to_nonblocking(hostfd_local);
-    if (ret < 0)
-    {
-        printf("set to non blocking failed\n");
-        close(hostfd_local);
-        return -1;
-    }
-    host_event.events = EPOLLIN;
-    host_event.data.fd = hostfd_local;
-    /* Add to the e-poll */
-    epoll_ctl(epfd, EPOLL_CTL_ADD, hostfd_local, &host_event);
     struct sockaddr_in host_addr;
     bzero(&host_addr, sizeof(host_addr));
-
     host_addr.sin_family = AF_INET;
     host_addr.sin_port = htons(port);
     if (inet_pton(AF_INET, ip, &host_addr.sin_addr) <= 0)
@@ -324,12 +292,9 @@ int connect_to_host(char *ip, uint16_t port)
 
     if (connect(hostfd_local, (struct sockaddr *)&host_addr, sizeof(host_addr)) < 0)
     {
-        if (errno != EINPROGRESS)
-        {
-            printf("connect failed, hostfd:%d, errno:%d, %s\n", hostfd_local, errno, strerror(errno));
-            close(hostfd_local);
-            return -1;
-        }
+        printf("connect failed, hostfd:%d, errno:%d, %s\n", hostfd_local, errno, strerror(errno));
+        close(hostfd_local);
+        return -1;
     }
 
     return hostfd_local;
@@ -348,9 +313,6 @@ int loop(void *arg)
     int i;
     for (i = 0; i < nevents; ++i)
     {
-        printf("nevents is %d\n", nevents);
-        loop_num++;
-        printf("loop is %d\n", loop_num);
         struct kevent event = events[i];
         int clientfd = (int)event.ident;
 
@@ -378,14 +340,12 @@ int loop(void *arg)
             printf("Closed hostfd %d\n", host_fd);
             /*Remove from fd pair */
             remove_fd_pair(fd_map, host_fd);
-            goto ret;
         }
         else if (clientfd == sockfd)
         {
             int available = (int)event.data;
             do
             {
-                printf("Accepting Connection \n");
                 int nclientfd = ff_accept(clientfd, NULL, NULL);
                 if (nclientfd < 0)
                 {
@@ -413,12 +373,10 @@ int loop(void *arg)
 
                 available--;
             } while (available);
-            goto ret;
         }
         else if (event.filter == EVFILT_READ)
         {
             size_t nbytes = 256;
-            printf("in EVILT_READ\n");
 
             /* Allocate double pointer to pass to the ff_read*/
             ptr = NULL;
@@ -447,97 +405,43 @@ int loop(void *arg)
                 printf("send to host failed\n");
                 break;
             }
-            printf("The number of bytes sent to host is %d\n", bytes_sent);
+            /* Clean the data buffer */
+            memset(host_data, 0, sizeof(host_data));
+            // int k;
+            // for (int j = 0 ; j < 100000000; j++){
+            //     k++;
+            // }
+            /* Read from host */
+            int bytes_read = read(hostfd, host_data, sizeof(host_data));
+            printf("bytes_read %d\n", bytes_read);
+            /* if read was successfull then send data back to client */
+            if (bytes_read >= 0){
+                void *rteMbuf_void = ff_rte_frm_extcl(ptr);
+                struct rte_mbuf *rteMbuf = (struct rte_mbuf *)rteMbuf_void;
+
+                ff_mbuf_detach_rte(ptr);
+                ff_mbuf_free(ptr);
+                rte_pktmbuf_reset(rteMbuf);
+                char *data11 = rte_pktmbuf_mtod_offset(rteMbuf, char *, 0);
+
+                memcpy(data11, host_data, bytes_read);
+                rteMbuf->pkt_len = bytes_read;
+                rteMbuf->data_len = bytes_read;
+
+                void *bsd_mbuf = ff_mbuf_get(NULL, rteMbuf_void, (void*)data11, bytes_read);
+                ff_write(clientfd, bsd_mbuf, bytes_read);
+
+            }else{
+                /* Do something */
+                goto ret;
+            }
         }
         else
         {
             printf("unknown event: %8.8X\n", event.flags);
         }
     }
-
-    int nhostfd = epoll_wait(epfd, host_events, MAX_EVENTS, 0);
-    if (nhostfd < 0)
-    {
-        printf("epoll wait failed\n");
-        return -1;
-    }
-    int j;
-    for (j = 0; j < nhostfd; ++j)
-    {
-        printf("nhostfd is %d\n", nhostfd);
-        struct epoll_event ev = host_events[j];
-        int hostfd = ev.data.fd;
-        // if read event on hostfd
-        if (ev.events & EPOLLIN)
-        {
-            printf("in EPOLLIN\n");
-            char *host_data = (char *)malloc(len_from_hostdata);
-            int bytes_read = read(hostfd, host_data, len_from_hostdata);
-            printf("The number of bytes read from host is %d\n", bytes_read);
-            if (bytes_read < 0)
-            {
-                printf("read from host failed\n");
-                break;
-            }
-
-            /* Get the clientfd using the hostfd */
-            int clientfd = get_clientfd(fd_map, hostfd);
-            if (clientfd < 0)
-            {
-                printf("clientfd not initialized\n");
-                break;
-            }
-            if (bytes_read > 0)
-            {
-                /*Allocate new rte_mbuf from mempool*/
-                unsigned lcore_id = rte_lcore_id();
-                unsigned socketid = rte_lcore_to_socket_id(lcore_id);
-                char s[64];
-                snprintf(s, sizeof(s), "mbuf_pool_%d", socketid);
-                struct rte_mempool *mp = rte_mempool_lookup(s);
-
-                if (!mp)
-                {
-                    printf("Cannot get memory pool.\n");
-                    return -1;
-                }
-
-                struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
-                if (!m)
-                {
-                    printf("Cannot allocate mbuf.\n");
-                    return -1;
-                }
-
-                /*Get data pointer of the rte_mbuf*/
-                char *data11 = rte_pktmbuf_mtod_offset(m, char *, 0);
-
-                /*Replace the contents of data11 and update the pkt flags */
-                memcpy(data11, host_data, bytes_read);
-                m->data_len = bytes_read;
-                m->pkt_len = bytes_read;
-
-                /* Get a new freebsd mbuf with ext_arg set as the new_rte_mbf*/
-                void *bsd_mbuf = ff_mbuf_get(NULL, (void *)m, (void *)data11, bytes_read);
-
-                /* Write the bsd_mbuf to the socket */
-                int ret = ff_write(clientfd, bsd_mbuf, bytes_read);
-                if (ret < 0)
-                {
-                    printf("write to client failed\n");
-                    break;
-                }
-            }
-
-            /* free the hostdata*/
-            free(host_data);
-        }
-        else
-        {
-            printf("unknown event: %8.8X\n", ev.events);
-        }
-    }
-ret:
+ret:    
     return 0;
 }
 
@@ -585,9 +489,6 @@ int main(int argc, char *argv[])
     EV_SET(&kevSet, sockfd, EVFILT_READ, EV_ADD, 0, MAX_EVENTS, NULL);
     /* Update kqueue */
     ff_kevent(kq, &kevSet, 1, NULL, 0, NULL);
-
-    /* Create a e-poll file descriptor for host id  */
-    epfd = epoll_create(MAX_EVENTS);
 
     /* Create a host socket */
     ff_run(loop, NULL);
