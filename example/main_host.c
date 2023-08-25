@@ -376,6 +376,7 @@ int loop(void *arg)
         }
         else if (event.filter == EVFILT_READ)
         {
+            
             size_t nbytes = 256;
 
             /* Allocate double pointer to pass to the ff_read*/
@@ -405,40 +406,65 @@ int loop(void *arg)
                 printf("send to host failed\n");
                 break;
             }
-            /* Clean the data buffer */
+            /* Set event to write */
+            EV_SET(&kevSet, clientfd, EVFILT_WRITE, EV_ADD, 0, 0, NULL);
+            if (ff_kevent(kq, &kevSet, 1, NULL, 0, NULL) < 0)
+            {
+                printf("ff_kevent error:%d, %s\n", errno,
+                       strerror(errno));
+                return -1;
+            }
+
+        }
+        else if(event.filter == EVFILT_WRITE)
+        {
+            // get the associated host fd
+            int host_fd = get_hostfd(fd_map, clientfd);
+            if (host_fd < 0)
+            {
+                printf("hostfd not found\n");
+                return -1;
+            }
+            // clean the data buffer 
             memset(host_data, 0, sizeof(host_data));
-            // int k;
-            // for (int j = 0 ; j < 100000000; j++){
-            //     k++;
-            // }
-            /* Read from host */
-            int bytes_read = read(hostfd, host_data, sizeof(host_data));
-            printf("bytes_read %d\n", bytes_read);
+
+            // read from host
+            int bytes_read = read(host_fd, host_data, sizeof(host_data));
             /* if read was successfull then send data back to client */
             if (bytes_read >= 0){
-                void *rteMbuf_void = ff_rte_frm_extcl(ptr);
-                struct rte_mbuf *rteMbuf = (struct rte_mbuf *)rteMbuf_void;
+                // Allocate a new rte mbuf 
+                unsigned lcore_id = rte_lcore_id();
+                unsigned socketid = rte_lcore_to_socket_id(lcore_id);
+                char s[64];
+                snprintf(s, sizeof(s), "mbuf_pool_%d", socketid);
+                struct rte_mempool *mp = rte_mempool_lookup(s);
 
-                ff_mbuf_detach_rte(ptr);
-                ff_mbuf_free(ptr);
-                rte_pktmbuf_reset(rteMbuf);
-                char *data11 = rte_pktmbuf_mtod_offset(rteMbuf, char *, 0);
+                if (!mp) {
+                    printf("Cannot get memory pool.\n");
+                    return -1;
+                }
 
+                struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
+                if (!m) {
+                    printf("Cannot allocate mbuf.\n");
+                    return -1;
+                }
+
+                /*Get data pointer of the rte_mbuf*/
+                char *data11 = rte_pktmbuf_mtod_offset(m, char *, 0);
+
+                /* Copy the data from host to the rte_mbuf */
                 memcpy(data11, host_data, bytes_read);
-                rteMbuf->pkt_len = bytes_read;
-                rteMbuf->data_len = bytes_read;
+                m->data_len = bytes_read;
+                m->pkt_len = bytes_read;
 
-                void *bsd_mbuf = ff_mbuf_get(NULL, rteMbuf_void, (void*)data11, bytes_read);
+
+                void *bsd_mbuf = ff_mbuf_get(NULL, (void*)m, (void*)data11, bytes_read);
                 ff_write(clientfd, bsd_mbuf, bytes_read);
-
             }else{
-                /* Do something */
                 goto ret;
-            }
-        }
-        else
-        {
-            printf("unknown event: %8.8X\n", event.flags);
+            }    
+
         }
     }
 ret:    
@@ -486,7 +512,7 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    EV_SET(&kevSet, sockfd, EVFILT_READ, EV_ADD, 0, MAX_EVENTS, NULL);
+    EV_SET(&kevSet, sockfd, EVFILT_READ|EVFILT_WRITE, EV_ADD, 0, MAX_EVENTS, NULL);
     /* Update kqueue */
     ff_kevent(kq, &kevSet, 1, NULL, 0, NULL);
 
