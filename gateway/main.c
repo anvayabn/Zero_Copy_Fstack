@@ -16,17 +16,22 @@
 #include <unistd.h>
 #include <ff_config.h>
 #include <ff_api.h>
+#include <ff_veth.h>
 #include "connection.h"
 #include "listen_sock.h"
 #include "signal.h"
 #include "shm.h"
 #include "../common/error.h"
 #include "../common/shm.h"
-
+#include <rte_mbuf.h>
+#include <rte_mbuf_core.h>
+#include <sys/ioctl.h>
+#include "gwmap.h"
 #define GATEWAY_ID 0
 #define IVSHMEM_PROT_VERSION 0
 #define MGR_SOCK_PATH "/tmp/ivshmem_socket"
 #define CONTROL_SHM_SIZE (sizeof(struct unimsg_shm))
+#define DEFAULT_SIZE 64 
 
 extern struct unimsg_ring *rte_mempool_unimsg_ring;
 static int peers_fds[UNIMSG_MAX_VMS];
@@ -34,6 +39,33 @@ static struct unimsg_shm *control_shm;
 static void *buffers_shm;
 static pthread_t mgr_handler_t;
 static volatile int stop = 0;
+
+/* f-stack thread variables*/
+int kq;
+int sockfd;
+#define MAX_EVENTS 512
+struct kevent kevSet;
+struct kevent events[MAX_EVENTS];
+static int opt_size = DEFAULT_SIZE;
+
+
+char html[] =
+"HTTP/1.1 200 OK\r\n"
+"Server: F-Stack\r\n"
+"Date: Sat, 25 Feb 2017 09:26:33 GMT\r\n"
+"Content-Type: text/html\r\n"
+"Content-Length: 73\r\n"
+"Connection: keep-alive\r\n"
+"Accept-Ranges: bytes\r\n"
+"\r\n"
+"<!DOCTYPE html>\r\n"
+"<html>\r\n"
+"<head>\r\n"
+"<title>Welcome</title>\r\n"
+"</head>\r\n"
+"</html>";
+
+// char html_hdr[sizeof(html_template) + 10];
 
 static void ivshmem_client_read_one_msg(int sock_fd, int64_t *index, int *fd)
 {
@@ -284,14 +316,207 @@ static int handle_peer_connection()
 	return 0;
 }
 
+
 int loop(void *arg)
 {
-	return 0;
-}
+    /* Wait for events to happen */
+    int nevents = ff_kevent(kq, NULL, 0, events, MAX_EVENTS, NULL);
+    int i;
 
+    if (nevents < 0) {
+        printf("ff_kevent failed:%d, %s\n", errno,
+                        strerror(errno));
+        return -1;
+    }
+
+    for (i = 0; i < nevents; ++i) {
+        struct kevent event = events[i];
+        int clientfd = (int)event.ident;
+
+        /* Handle disconnect */
+        if (event.flags & EV_EOF) {
+            /* Simply close socket */
+            ff_close(clientfd);
+
+			/* close the uniserver connection */
+			struct conn *c = get_clientfd(fd_map, clientfd);
+			conn_close(c, CONN_SIDE_SRV);
+			printf("Connection closed\n");
+#ifdef INET6
+        } else if (clientfd == sockfd || clientfd == sockfd6) {
+#else
+        } else if (clientfd == sockfd) {
+#endif
+            int available = (int)event.data;
+            do {
+                int nclientfd = ff_accept(clientfd, NULL, NULL);
+                if (nclientfd < 0) {
+                    printf("ff_accept failed:%d, %s\n", errno,
+                        strerror(errno));
+                    break;
+                }
+
+                /* Add to event list */
+                EV_SET(&kevSet, nclientfd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+
+                if(ff_kevent(kq, &kevSet, 1, NULL, 0, NULL) < 0) {
+                    printf("ff_kevent error:%d, %s\n", errno,
+                        strerror(errno));
+                    return -1;
+                }
+
+                available--;
+
+				/*Initiate connection to radiobox server */ 
+				struct conn *cn; 
+				int ret = connect_to_peer(1, 5000, &cn);
+				if (ret){
+					printf("connect_to_peer failed:%d, %s\n", errno,
+						strerror(errno));
+					return -1;
+				}
+				/* Add the pair to the map */
+				add_fd_pair(fd_map, nclientfd, cn);
+
+	           } while (available);
+        } else if (event.filter == EVFILT_READ) {
+            void *mb = NULL;
+            ssize_t readlen = ff_read(clientfd, &mb, 4096);
+            struct rte_mbuf *rte_mb = ff_rte_frm_extcl(mb);
+			/* get the data from the mb freebsd buf*/
+			char *read_data = (char *)ff_mbuf_mtod(mb);
+            // ff_mbuf_detach_rte(mb);
+            // ff_mbuf_free(mb);	
+			// printf("content of read_data: %s\n", read_data);
+			struct conn *c = get_clientfd(fd_map, clientfd);
+			if (c == NULL){ 
+				printf("get_clientfd failed:%d, %s\n", errno,
+					strerror(errno));
+				return -1;
+			}
+
+			unsigned ndescs = (readlen - 1)/ UNIMSG_BUFFER_SIZE + 1;
+			struct unimsg_shm_desc descs[UNIMSG_MAX_DESCS_BULK];
+			descs[0].addr = buffers_shm;
+			memcpy(descs[0].addr, read_data, readlen);
+			// printf("content of desc[%d]: %s\n", i, (char *) descs[i].addr);
+			descs[0].size = UNIMSG_BUFFER_SIZE;
+			int rc;
+			/* read from the external client and send the descriptor to the unikernel server*/
+			do
+			    rc = conn_send(c, descs, ndescs, CONN_SIDE_SRV);
+			while (rc == -EAGAIN);
+			if (rc == -ECONNRESET) {
+				unimsg_buffer_put(descs, ndescs);
+				break;
+			} else if (rc) {
+				unimsg_buffer_put(descs, ndescs);
+				ERROR("Error sending desc: %s\n", strerror(-rc));
+			}
+			ff_mbuf_free(mb);
+			// rte_pktmbuf_reset(rte_mb);
+			// void *rte_data = rte_pktmbuf_mtod(rte_mb, void *);
+			// memcpy(rte_data, html, sizeof(html) - 1);
+            // rte_mb->data_len = sizeof(html) - 1;
+            // rte_mb->pkt_len = rte_mb->data_len;
+
+            // mb = ff_mbuf_get(NULL, rte_mb, rte_data, rte_mb->data_len);
+            // ssize_t writelen = ff_write(clientfd, mb, rte_mb->data_len);
+        } else {
+            printf("unknown event: %8.8X\n", event.flags);
+		}
+    }
+	for (int i = 0 ; i < MAX_CONNECTIONS ; i++ ){
+		if(fd_map[i].hostfd != -1 && fd_map[i].connection != NULL){
+			// read from the connection 
+			struct conn *c = fd_map[i].connection;
+			struct unimsg_shm_desc descs[UNIMSG_MAX_DESCS_BULK];
+			unsigned ndescs = 1;
+			int rc;
+			do
+				rc = conn_recv(c, descs, &ndescs, CONN_SIDE_SRV);
+			while (rc == -EAGAIN);
+			if (rc == -ECONNRESET)
+				break;
+			else if (rc)
+				ERROR("Error receiving desc: %s\n", strerror(-rc));
+
+			printf("ndescs: %d\n", ndescs);
+			//print the data sent back 
+			printf("the content of the data sent back: %s\n", (char *)descs[0].addr);
+			if (descs[0].addr != NULL && descs[0].size != 0){
+				
+				unsigned lcore_id = rte_lcore_id();
+				unsigned socketid = rte_lcore_to_socket_id(lcore_id);
+				char s[64];
+				snprintf(s, sizeof(s), "mbuf_pool_%d", socketid);
+				struct rte_mempool *mp = rte_mempool_lookup(s);
+
+				if (!mp) {
+					printf("Cannot get memory pool.\n");
+					return -1;
+				}
+
+				struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
+				if (!m) {
+					printf("Cannot allocate mbuf.\n");
+					return -1;
+				}
+
+				/*Get data pointer of the rte_mbuf*/
+				char *data11 = rte_pktmbuf_mtod_offset(m, char *, 0);
+
+				/*Replace the contents of data11 and update the pkt flags */
+				memcpy(data11, descs[0].addr, descs[0].size);
+				m->data_len = descs[0].size;
+				m->pkt_len = descs[0].size;
+				
+				/* Get a new freebsd mbuf with ext_arg set as the new_rte_mbf*/
+				void *bsd_mbuf = ff_mbuf_get(NULL, (void *)m, (void*)data11, m->data_len);
+
+				/* Write the bsd_mbuf to the socket */
+				ff_write(fd_map[i].hostfd, bsd_mbuf, m->data_len);
+			}
+		}
+	}
+
+}
 static void sigint_handler(int signum)
 {
 	stop = 1;
+}
+
+void gateway_start(){
+	/* f-stack configuration */
+	kq = ff_kqueue();
+	if (kq < 0)
+		SYSERROR("Error creating kqueue");
+
+	sockfd = ff_socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd < 0)
+		SYSERROR("Error creating socket");
+	
+	/* Set non blocking */
+	int on = 1;
+	if (ff_ioctl(sockfd, FIONBIO, &on) < 0)
+		SYSERROR("Error setting non blocking");
+	
+	struct sockaddr_in my_addr;
+	bzero(&my_addr, sizeof(my_addr));
+	my_addr.sin_family = AF_INET;
+	my_addr.sin_port = htons(80);
+	my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	if (ff_bind(sockfd, (struct linux_sockaddr *)&my_addr, sizeof(my_addr)) < 0)
+		SYSERROR("Error binding socket");
+
+	if (ff_listen(sockfd, MAX_EVENTS) < 0)
+		SYSERROR("Error listening socket");
+
+	EV_SET(&kevSet, sockfd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+	if (ff_kevent(kq, &kevSet, 1, NULL, 0, NULL) < 0)
+		SYSERROR("Error registering kevent");
+
 }
 
 int main(int argc, char *argv[])
@@ -305,7 +530,7 @@ int main(int argc, char *argv[])
 
 	ff_init(argc, argv, buffers_shm, UNIMSG_BUFFERS_COUNT,
 		UNIMSG_BUFFER_SIZE);
-
+	
 	shm_init(control_shm, buffers_shm);
 	signal_init(control_shm, peers_fds);
 	conn_init(control_shm);
@@ -315,9 +540,12 @@ int main(int argc, char *argv[])
 	if (sigaction(SIGINT, &sigact, NULL))
 		SYSERROR("Error setting SIGINT handler");
 
-	while (!stop)
-		handle_peer_connection();
-
+	// while (!stop)
+	// 	handle_peer_connection();
+	/* intialize the fd_map*/
+	initialize_fd_map();
+	gateway_start();
+	ff_run(loop, NULL);	
 	pthread_join(mgr_handler_t, NULL);
 
 	return 0;
